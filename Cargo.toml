@@ -1,0 +1,6 @@
+[package]
+name = "linsolve"
+version = "0.1.0"
+authors = ["Adam Richardson"]
+
+[dependencies]
