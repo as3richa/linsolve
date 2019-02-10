@@ -1,31 +1,45 @@
 use std::io;
+use std::rc::Rc;
+
+#[derive(Clone)]
+pub enum StreamValue {
+    Byte(u8),
+    Err(Rc<io::Error>),
+    EndOfFile,
+}
 
 pub struct Stream<I: Iterator<Item = Result<u8, io::Error>>> {
     pub filename: String,
     pub line: u32,
     pub column: u32,
-    pub peeked: Option<u8>,
-    pub error: Option<io::Error>,
+    peeked: Option<StreamValue>,
     iter: I,
 }
 
 impl<I: Iterator<Item = Result<u8, io::Error>>> Stream<I> {
     pub fn new(filename: String, iter: I) -> Stream<I> {
         Stream {
-            filename: filename,
+            filename,
             line: 1,
             column: 1,
             peeked: None,
-            error: None,
-            iter: iter,
+            iter,
         }
     }
 
-    pub fn next(&mut self) -> Option<u8> {
-        if self.peeked == None {
-            self.peek();
-        }
-        if let Some(byte) = self.peeked {
+    pub fn forward(&mut self) {
+        let maybe_byte = match self.peeked.take() {
+            Some(StreamValue::Byte(byte)) => Some(byte),
+            Some(StreamValue::Err(_)) => None,
+            Some(StreamValue::EndOfFile) => None,
+            None => match self.iter.next() {
+                Some(Ok(byte)) => Some(byte),
+                Some(Err(_)) => None,
+                None => None,
+            },
+        };
+
+        if let Some(byte) = maybe_byte {
             if byte == b'\n' {
                 self.line += 1;
                 self.column = 1;
@@ -33,19 +47,16 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Stream<I> {
                 self.column += 1;
             }
         }
-        let value = self.peeked;
-        self.peeked = None;
-        value
     }
 
-    pub fn peek(&mut self) -> Option<u8> {
-        assert_eq!(self.peeked, None);
-        if let Some(result) = self.iter.next() {
-            match result {
-                Ok(byte) => self.peeked = Some(byte),
-                Err(error) => self.error = Some(error),
-            }
-        }
-        self.peeked
+    pub fn peek(&mut self) -> StreamValue {
+        assert!(self.peeked.is_none());
+        let result = match self.iter.next() {
+            Some(Ok(byte)) => StreamValue::Byte(byte),
+            Some(Err(error)) => StreamValue::Err(Rc::new(error)),
+            None => StreamValue::EndOfFile,
+        };
+        self.peeked = Some(result.clone());
+        result
     }
 }
