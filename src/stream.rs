@@ -50,13 +50,17 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Stream<I> {
     }
 
     pub fn peek(&mut self) -> StreamValue {
-        assert!(self.peeked.is_none());
-        let result = match self.iter.next() {
-            Some(Ok(byte)) => StreamValue::Byte(byte),
-            Some(Err(error)) => StreamValue::Err(Rc::new(error)),
-            None => StreamValue::EndOfFile,
-        };
-        self.peeked = Some(result.clone());
-        result
+        match self.peeked {
+            Some(ref result) => result.clone(),
+            None => {
+                let result = match self.iter.next() {
+                    Some(Ok(byte)) => StreamValue::Byte(byte),
+                    Some(Err(error)) => StreamValue::Err(Rc::new(error)),
+                    None => StreamValue::EndOfFile,
+                };
+                self.peeked = Some(result.clone());
+                result
+            }
+        }
     }
 }
