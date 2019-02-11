@@ -18,7 +18,7 @@ pub struct Stream<I: Iterator<Item = Result<u8, io::Error>>> {
 
 impl<I: Iterator<Item = Result<u8, io::Error>>> Stream<I> {
     pub fn new(filename: String, iter: I) -> Stream<I> {
-        Stream {
+        Self {
             filename,
             line: 1,
             column: 1,
