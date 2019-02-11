@@ -5,7 +5,7 @@ mod stream;
 use stream::Stream;
 
 mod lexer;
-use lexer::{Lexer, LexResult};
+use lexer::{LexResult, Lexer, TokenData};
 
 fn main() {
     let stdin = io::stdin();
@@ -15,8 +15,22 @@ fn main() {
 
     loop {
         match lexer.lex() {
-            LexResult::EndOfFile => break,
-            _ => unreachable!()
+            LexResult::Ok(token) => {
+                let description = match token.data {
+                    TokenData::Whitespace => "whitespace",
+                    TokenData::Comment => "comment",
+                    TokenData::EndOfLine => "end of line",
+                };
+                println!("{}:{}: {}", token.line, token.column, description);
+            }
+            LexResult::EndOfFile => {
+                println!("End of file");
+                break;
+            }
+            LexResult::Err(error) => {
+                println!("Error: {}", error);
+                break;
+            }
         }
     }
 }

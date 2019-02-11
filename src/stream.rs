@@ -4,8 +4,8 @@ use std::rc::Rc;
 #[derive(Clone)]
 pub enum StreamValue {
     Byte(u8),
-    Err(Rc<io::Error>),
     EndOfFile,
+    Err(Rc<io::Error>),
 }
 
 pub struct Stream<I: Iterator<Item = Result<u8, io::Error>>> {
