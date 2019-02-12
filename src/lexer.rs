@@ -41,7 +41,88 @@ impl error::Error for LexError {
     }
 }
 
+macro_rules! lex_error {
+    ($self:ident, $( $format_params:expr ),+) => {
+        {
+            let message = format!($($format_params),*);
+            let error = LexError::new(&$self.stream.filename, $self.stream.line, $self.stream.column, &message);
+            let rc: Rc<error::Error> = Rc::new(error);
+            Err(rc)
+        }
+    }
+}
+
+macro_rules! consume {
+    ($self:ident, $( $patterns:pat )|+, $matched:ident, $unmatched:ident) => {
+        {
+            while let StreamValue::Byte(byte) = $self.stream.peek() {
+                match byte {
+                    $($patterns)|* => $matched!(byte),
+                    _ => $unmatched!(byte)
+                }
+                $self.stream.forward()
+            }
+
+            if let StreamValue::Err(error) = $self.stream.peek() {
+                return Err(error);
+            }
+        }
+    }
+}
+
+macro_rules! munch_while {
+    ($self:ident, $lexeme:ident, $( $patterns:pat )|+) => {
+        macro_rules! matched {
+            ($byte:ident) => { $lexeme.push($byte as char); }
+        }
+        macro_rules! unmatched {
+            ($byte:ident) => { break; }
+        }
+        consume!($self, $($patterns)|*, matched, unmatched)
+    }
+}
+
+macro_rules! skip_while {
+    ($self:ident, $( $patterns:pat )|+) => {
+        macro_rules! matched {
+            ($byte:ident) => { (); }
+        }
+        macro_rules! unmatched {
+            ($byte:ident) => { break; }
+        }
+        consume!($self, $($patterns)|*, matched, unmatched)
+    }
+}
+
+macro_rules! skip_until {
+    ($self:ident, $( $patterns:pat )|+) => {
+        macro_rules! matched {
+            ($byte:ident) => { break; }
+        }
+        macro_rules! unmatched {
+            ($byte:ident) => { (); }
+        }
+        consume!($self, $($patterns)|*, matched, unmatched)
+    }
+}
+
+macro_rules! assert_byte {
+    ($self: ident, $( $patterns:pat )|+, $message:expr) => {
+        match $self.stream.peek() {
+            StreamValue::Byte(byte) => {
+                match byte {
+                    $($patterns)|* => (),
+                    _ => return lex_error!($self, $message)
+                }
+            },
+            StreamValue::Err(error) => return Err(error),
+            StreamValue::EndOfFile => return lex_error!($self, $message)
+        }
+    }
+}
+
 pub enum TokenData {
+    Variable(String),
     Whitespace,
     Comment,
     EndOfLine,
@@ -75,23 +156,15 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
         let column = self.stream.column;
 
         let result = match byte {
+            b'a'...b'z' | b'A'...b'Z' => self.lex_variable(),
             b'#' => self.lex_comment(),
             b' ' | b'\t' => self.lex_whitespace(),
             b'\r' | b'\n' => self.lex_end_of_line(),
-            _ => {
-                let message = format!(
-                    "Non-ASCII byte {:#x} (Unicode is permitted only in comments)",
-                    byte
-                );
-                let error = LexError::new(
-                    &self.stream.filename,
-                    self.stream.line,
-                    self.stream.column,
-                    &message,
-                );
-                let rc: Rc<error::Error> = Rc::new(error);
-                Err(rc)
-            }
+            _ => lex_error!(
+                self,
+                "Non-ASCII byte {:#x} (Unicode is permitted only in comments)",
+                byte
+            ),
         };
 
         match result {
@@ -100,48 +173,63 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
         }
     }
 
-    fn lex_comment(&mut self) -> Result<TokenData, Rc<dyn error::Error>> {
-        loop {
-            self.stream.forward();
-            match self.stream.peek() {
-                StreamValue::Byte(byte) => {
-                    if byte == b'\r' || byte == b'\n' {
-                        return Ok(TokenData::Comment);
+    fn lex_variable(&mut self) -> Result<TokenData, Rc<dyn error::Error>> {
+        let mut lexeme = String::new();
+        munch_while!(self, lexeme, b'a' ... b'z' | b'A' ... b'Z');
+
+        match self.stream.peek() {
+            StreamValue::Byte(b'_') => {
+                lexeme.push('_');
+                self.stream.forward();
+            }
+            _ => return Ok(TokenData::Variable(lexeme)),
+        }
+
+        match self.stream.peek() {
+            StreamValue::Byte(byte) => {
+                match byte {
+                    b'a'...b'z' | b'A'...b'Z' | b'0'...b'9' => {
+                        munch_while!(self, lexeme, b'a' ... b'z' | b'A' ... b'Z' | b'0' ... b'9');
+                    }
+                    b'{' => {
+                        self.stream.forward();
+                        skip_while!(self, b' ' | b'\t');
+
+                        assert_byte!(self, b'a' ... b'z' | b'A' ... b'Z' | b'0' ... b'9', "expected a braced alphanumeric subscript for variable");
+                        munch_while!(self, lexeme, b'a' ... b'z' | b'A' ... b'Z' | b'0' ... b'9');
+
+                        skip_while!(self, b' ' | b'\t');
+
+                        assert_byte!(self, b'}', "expected a closing brace");
+                        self.stream.forward();
+                    }
+                    _ => {
+                        return lex_error!(
+                            self,
+                            "expected an alphanumeric or braced subscript for variable"
+                        );
                     }
                 }
-                StreamValue::EndOfFile => return Ok(TokenData::Comment),
-                StreamValue::Err(error) => return Err(error),
+
+                Ok(TokenData::Variable(lexeme))
             }
+            StreamValue::EndOfFile => lex_error!(self, "missing subscript for variable"),
+            StreamValue::Err(error) => Err(error),
         }
+    }
+
+    fn lex_comment(&mut self) -> Result<TokenData, Rc<dyn error::Error>> {
+        skip_until!(self, b'\r' | b'\n');
+        Ok(TokenData::Comment)
     }
 
     fn lex_whitespace(&mut self) -> Result<TokenData, Rc<dyn error::Error>> {
-        loop {
-            self.stream.forward();
-            match self.stream.peek() {
-                StreamValue::Byte(byte) => {
-                    if byte != b' ' && byte != b'\t' {
-                        return Ok(TokenData::Whitespace);
-                    }
-                }
-                StreamValue::EndOfFile => return Ok(TokenData::Whitespace),
-                StreamValue::Err(error) => return Err(error),
-            }
-        }
+        skip_while!(self, b' ' | b'\t');
+        Ok(TokenData::Whitespace)
     }
 
     fn lex_end_of_line(&mut self) -> Result<TokenData, Rc<dyn error::Error>> {
-        loop {
-            self.stream.forward();
-            match self.stream.peek() {
-                StreamValue::Byte(byte) => {
-                    if byte != b'\r' && byte != b'\n' {
-                        return Ok(TokenData::EndOfLine);
-                    }
-                }
-                StreamValue::EndOfFile => return Ok(TokenData::EndOfLine),
-                StreamValue::Err(error) => return Err(error),
-            }
-        }
+        skip_while!(self, b'\r' | b'\n');
+        Ok(TokenData::EndOfLine)
     }
 }
