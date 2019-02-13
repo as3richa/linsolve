@@ -49,7 +49,7 @@ macro_rules! lex_error {
             let rc: Rc<error::Error> = Rc::new(error);
             Err(rc)
         }
-    }
+    };
 }
 
 macro_rules! consume {
@@ -67,7 +67,7 @@ macro_rules! consume {
                 return Err(error);
             }
         }
-    }
+    };
 }
 
 macro_rules! munch_while {
@@ -79,7 +79,15 @@ macro_rules! munch_while {
             ($byte:ident) => { break; }
         }
         consume!($self, $($patterns)|*, matched, unmatched)
-    }
+    };
+
+    ($self:ident, $lexeme:ident, :alpha) => {
+        munch_while!($self, $lexeme, b'a'...b'z' | b'A'...b'Z')
+    };
+
+    ($self:ident, $lexeme:ident, :alphanumeric) => {
+        munch_while!($self, $lexeme, b'a'...b'z' | b'A'...b'Z' | b'0'...b'9')
+    };
 }
 
 macro_rules! skip_while {
@@ -91,7 +99,11 @@ macro_rules! skip_while {
             ($byte:ident) => { break; }
         }
         consume!($self, $($patterns)|*, matched, unmatched)
-    }
+    };
+
+    ($self:ident, :whitespace) => {
+        skip_while!($self, b' ' | b'\t')
+    };
 }
 
 macro_rules! skip_until {
@@ -103,7 +115,7 @@ macro_rules! skip_until {
             ($byte:ident) => { (); }
         }
         consume!($self, $($patterns)|*, matched, unmatched)
-    }
+    };
 }
 
 macro_rules! assert_byte {
@@ -118,7 +130,11 @@ macro_rules! assert_byte {
             StreamValue::Err(error) => return Err(error),
             StreamValue::EndOfFile => return lex_error!($self, $message)
         }
-    }
+    };
+
+    ($self: ident, :alphanumeric, $message:expr) => {
+        assert_byte!($self, b'a'...b'z' | b'A'...b'Z' | b'0'...b'9', $message)
+    };
 }
 
 pub enum TokenData {
@@ -157,12 +173,20 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
 
         let result = match byte {
             b'a'...b'z' | b'A'...b'Z' => self.lex_variable(),
+            b'0'...b'9' => unreachable!(), /* FIXME */
             b'#' => self.lex_comment(),
             b' ' | b'\t' => self.lex_whitespace(),
             b'\r' | b'\n' => self.lex_end_of_line(),
+
+            /* Printable ASCII that isn't a valid leading character for a token */
+            b'!' | b'"' | b'$'...b'/' | b':'...b'@' | b'['...b'`' | b'{'...b'~' => {
+                lex_error!(self, "unexpected character {}", byte as char)
+            }
+
+            /* Unprintable ASCII, or a byte that isn't valid ASCII */
             _ => lex_error!(
                 self,
-                "Non-ASCII byte {:#x} (Unicode is permitted only in comments)",
+                "unexpected byte {:#x} (Unicode is permitted only in comments)",
                 byte
             ),
         };
@@ -174,46 +198,51 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
     }
 
     fn lex_variable(&mut self) -> Result<TokenData, Rc<dyn error::Error>> {
+        /* Variables look like: (i) Strings of letters, e.g. x, alpha, Gamma; (ii) Strings
+         * of letters followed by an unbraced alphanumeric subscript, e.g. x_1, alpha_zero
+         * Gamma_k1; (iii) Strings of letters followed by a Latex-esque braced alphanumeric
+         * subscript, with leading and trailing spaces permitted, e.g. x_{1}, alpha_{ zero },
+         * Gamma_{k1} */
+
         let mut lexeme = String::new();
-        munch_while!(self, lexeme, b'a' ... b'z' | b'A' ... b'Z');
+        munch_while!(self, lexeme, :alpha);
 
         match self.stream.peek() {
             StreamValue::Byte(b'_') => {
                 lexeme.push('_');
                 self.stream.forward();
             }
-            _ => return Ok(TokenData::Variable(lexeme)),
+            _ => return Ok(TokenData::Variable(lexeme)), /* Case (i) */
         }
 
         match self.stream.peek() {
             StreamValue::Byte(byte) => {
                 match byte {
                     b'a'...b'z' | b'A'...b'Z' | b'0'...b'9' => {
-                        munch_while!(self, lexeme, b'a' ... b'z' | b'A' ... b'Z' | b'0' ... b'9');
+                        /* Case (ii) */
+                        munch_while!(self, lexeme, :alphanumeric);
                     }
                     b'{' => {
+                        /* Case (iii) */
                         self.stream.forward();
-                        skip_while!(self, b' ' | b'\t');
+                        skip_while!(self, :whitespace);
 
-                        assert_byte!(self, b'a' ... b'z' | b'A' ... b'Z' | b'0' ... b'9', "expected a braced alphanumeric subscript for variable");
-                        munch_while!(self, lexeme, b'a' ... b'z' | b'A' ... b'Z' | b'0' ... b'9');
+                        assert_byte!(self, :alphanumeric, "expected an braced-alphanumeric subscript for variable");
+                        munch_while!(self, lexeme, :alphanumeric);
 
-                        skip_while!(self, b' ' | b'\t');
+                        skip_while!(self, :whitespace);
 
                         assert_byte!(self, b'}', "expected a closing brace");
                         self.stream.forward();
                     }
                     _ => {
-                        return lex_error!(
-                            self,
-                            "expected an alphanumeric or braced subscript for variable"
-                        );
+                        return lex_error!(self, "expected an alphanumeric or braced-alphanumeric subscript for variable");
                     }
                 }
 
                 Ok(TokenData::Variable(lexeme))
             }
-            StreamValue::EndOfFile => lex_error!(self, "missing subscript for variable"),
+            StreamValue::EndOfFile => lex_error!(self, "expected a subscript for variable"),
             StreamValue::Err(error) => Err(error),
         }
     }
@@ -224,7 +253,7 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
     }
 
     fn lex_whitespace(&mut self) -> Result<TokenData, Rc<dyn error::Error>> {
-        skip_while!(self, b' ' | b'\t');
+        skip_while!(self, :whitespace);
         Ok(TokenData::Whitespace)
     }
 
