@@ -88,6 +88,10 @@ macro_rules! munch_while {
     ($self:ident, $lexeme:ident, :alphanumeric) => {
         munch_while!($self, $lexeme, b'a'...b'z' | b'A'...b'Z' | b'0'...b'9')
     };
+
+    ($self:ident, $lexeme:ident, :numeric) => {
+        munch_while!($self, $lexeme, b'0'...b'9')
+    };
 }
 
 macro_rules! skip_while {
@@ -135,10 +139,15 @@ macro_rules! assert_byte {
     ($self: ident, :alphanumeric, $message:expr) => {
         assert_byte!($self, b'a'...b'z' | b'A'...b'Z' | b'0'...b'9', $message)
     };
+
+    ($self: ident, :numeric, $message:expr) => {
+        assert_byte!($self, b'0'...b'9', $message)
+    };
 }
 
 pub enum TokenData {
     Variable(String),
+    Decimal(String),
     Whitespace,
     Comment,
     EndOfLine,
@@ -173,13 +182,13 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
 
         let result = match byte {
             b'a'...b'z' | b'A'...b'Z' => self.lex_variable(),
-            b'0'...b'9' => unreachable!(), /* FIXME */
+            b'.' | b'0'...b'9' => self.lex_decimal(),
             b'#' => self.lex_comment(),
             b' ' | b'\t' => self.lex_whitespace(),
             b'\r' | b'\n' => self.lex_end_of_line(),
 
             /* Printable ASCII that isn't a valid leading character for a token */
-            b'!' | b'"' | b'$'...b'/' | b':'...b'@' | b'['...b'`' | b'{'...b'~' => {
+            b'!' | b'"' | b'$'...b'-' | b'/' | b':'...b'@' | b'['...b'`' | b'{'...b'~' => {
                 lex_error!(self, "unexpected character {}", byte as char)
             }
 
@@ -204,15 +213,15 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
          * subscript, with leading and trailing spaces permitted, e.g. x_{1}, alpha_{ zero },
          * Gamma_{k1} */
 
-        let mut lexeme = String::new();
-        munch_while!(self, lexeme, :alpha);
+        let mut identifier = String::new();
+        munch_while!(self, identifier, :alpha);
 
         match self.stream.peek() {
             StreamValue::Byte(b'_') => {
-                lexeme.push('_');
+                identifier.push('_');
                 self.stream.forward();
             }
-            _ => return Ok(TokenData::Variable(lexeme)), /* Case (i) */
+            _ => return Ok(TokenData::Variable(identifier)), /* Case (i) */
         }
 
         match self.stream.peek() {
@@ -220,7 +229,7 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
                 match byte {
                     b'a'...b'z' | b'A'...b'Z' | b'0'...b'9' => {
                         /* Case (ii) */
-                        munch_while!(self, lexeme, :alphanumeric);
+                        munch_while!(self, identifier, :alphanumeric);
                     }
                     b'{' => {
                         /* Case (iii) */
@@ -228,7 +237,7 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
                         skip_while!(self, :whitespace);
 
                         assert_byte!(self, :alphanumeric, "expected an braced-alphanumeric subscript for variable");
-                        munch_while!(self, lexeme, :alphanumeric);
+                        munch_while!(self, identifier, :alphanumeric);
 
                         skip_while!(self, :whitespace);
 
@@ -240,10 +249,54 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
                     }
                 }
 
-                Ok(TokenData::Variable(lexeme))
+                Ok(TokenData::Variable(identifier))
             }
-            StreamValue::EndOfFile => lex_error!(self, "expected a subscript for variable"),
             StreamValue::Err(error) => Err(error),
+            StreamValue::EndOfFile => lex_error!(self, "expected a subscript for variable"),
+        }
+    }
+
+    fn lex_decimal(&mut self) -> Result<TokenData, Rc<dyn error::Error>> {
+        let mut value = String::new();
+        munch_while!(self, value, :numeric);
+
+        match self.stream.peek() {
+            StreamValue::Byte(byte) => {
+                if byte == b'.' {
+                    value.push('.');
+                    self.stream.forward();
+                    assert_byte!(self, :numeric, "expected fractional part of value to be non-empty");
+                    munch_while!(self, value, :numeric);
+                }
+            }
+            StreamValue::Err(error) => return Err(error),
+            StreamValue::EndOfFile => return Ok(TokenData::Decimal(value)),
+        }
+
+        match self.stream.peek() {
+            StreamValue::Byte(byte) => {
+                if byte == b'e' || byte == b'E' {
+                    value.push('e');
+                    self.stream.forward();
+                    if let StreamValue::Byte(byte) = self.stream.peek() {
+                        match byte {
+                            b'-' => {
+                                value.push('-');
+                                self.stream.forward();
+                            }
+                            b'+' => {
+                                self.stream.forward();
+                            }
+                            _ => (),
+                        }
+                    }
+                    assert_byte!(self, :numeric, "expected an optional sign followed by an integer in exponential part of decimal");
+                    munch_while!(self, value, :numeric);
+                }
+                Ok(TokenData::Decimal(value))
+            }
+            StreamValue::Err(error) => Err(error),
+            StreamValue::EndOfFile => Ok(TokenData::Decimal(value)),
         }
     }
 

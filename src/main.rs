@@ -17,7 +17,8 @@ fn main() {
         match lexer.lex() {
             LexResult::Ok(token) => {
                 let description = match token.data {
-                    TokenData::Variable(lexeme) => "variable ".to_string() + &lexeme,
+                    TokenData::Variable(identifier) => "variable ".to_string() + &identifier,
+                    TokenData::Decimal(value) => "decimal ".to_string() + &value,
                     TokenData::Whitespace => "whitespace".to_string(),
                     TokenData::Comment => "comment".to_string(),
                     TokenData::EndOfLine => "end of line".to_string(),
