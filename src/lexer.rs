@@ -148,6 +148,11 @@ macro_rules! assert_byte {
 pub enum TokenData {
     Variable(String),
     Decimal(String),
+    Plus,
+    Minus,
+    Times,
+    DividedBy,
+    Equals,
     Whitespace,
     Comment,
     EndOfLine,
@@ -187,10 +192,27 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
             b' ' | b'\t' => self.lex_whitespace(),
             b'\r' | b'\n' => self.lex_end_of_line(),
 
-            /* Printable ASCII that isn't a valid leading character for a token */
-            b'!' | b'"' | b'$'...b'-' | b'/' | b':'...b'@' | b'['...b'`' | b'{'...b'~' => {
-                lex_error!(self, "unexpected character {}", byte as char)
+            b'+' | b'-' | b'*' | b'/' | b'=' => {
+                self.stream.forward();
+                match byte {
+                    b'+' => Ok(TokenData::Plus),
+                    b'-' => Ok(TokenData::Minus),
+                    b'*' => Ok(TokenData::Times),
+                    b'/' => Ok(TokenData::DividedBy),
+                    b'=' => Ok(TokenData::Equals),
+                    _ => unreachable!(),
+                }
             }
+
+            /* Printable ASCII that isn't a valid leading character for a token */
+            b'!'
+            | b'"'
+            | b'$'...b')'
+            | b','
+            | b':'...b'<'
+            | b'>'...b'@'
+            | b'['...b'`'
+            | b'{'...b'~' => lex_error!(self, "unexpected character {}", byte as char),
 
             /* Unprintable ASCII, or a byte that isn't valid ASCII */
             _ => lex_error!(

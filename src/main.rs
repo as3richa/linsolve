@@ -22,6 +22,11 @@ fn main() {
                     TokenData::Whitespace => "whitespace".to_string(),
                     TokenData::Comment => "comment".to_string(),
                     TokenData::EndOfLine => "end of line".to_string(),
+                    TokenData::Plus => "plus".to_string(),
+                    TokenData::Minus => "minus".to_string(),
+                    TokenData::Times => "times".to_string(),
+                    TokenData::DividedBy => "divided by".to_string(),
+                    TokenData::Equals => "equals".to_string(),
                 };
                 println!("{}:{}: {}", token.line, token.column, description);
             }
