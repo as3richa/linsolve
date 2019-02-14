@@ -1,15 +1,9 @@
+use std::boxed::Box;
 use std::error;
 use std::fmt;
 use std::io;
-use std::rc::Rc;
 
-use crate::stream::{Stream, StreamValue};
-
-pub enum LexResult {
-    Ok(Token),
-    EndOfFile,
-    Err(Rc<dyn error::Error>),
-}
+use crate::stream::Stream;
 
 #[derive(Debug)]
 struct LexError {
@@ -46,25 +40,25 @@ macro_rules! lex_error {
         {
             let message = format!($($format_params),*);
             let error = LexError::new(&$self.stream.filename, $self.stream.line, $self.stream.column, &message);
-            let rc: Rc<error::Error> = Rc::new(error);
-            Err(rc)
+            let boxed: Box<error::Error> = Box::new(error);
+            Err(boxed)
         }
     };
 }
 
 macro_rules! consume {
     ($self:ident, $( $patterns:pat )|+, $matched:ident, $unmatched:ident) => {
-        {
-            while let StreamValue::Byte(byte) = $self.stream.peek() {
-                match byte {
-                    $($patterns)|* => $matched!(byte),
-                    _ => $unmatched!(byte)
-                }
-                $self.stream.forward()
-            }
-
-            if let StreamValue::Err(error) = $self.stream.peek() {
-                return Err(error);
+        loop {
+            match $self.stream.peek() {
+                Ok(Some(byte)) => {
+                    match byte {
+                        $($patterns)|* => $matched!(byte),
+                        _ => $unmatched!(byte)
+                    }
+                    $self.stream.forward()
+                },
+                Ok(None) => break,
+                Err(error) => return Err(Box::new(error)),
             }
         }
     };
@@ -125,14 +119,14 @@ macro_rules! skip_until {
 macro_rules! assert_byte {
     ($self: ident, $( $patterns:pat )|+, $message:expr) => {
         match $self.stream.peek() {
-            StreamValue::Byte(byte) => {
+            Ok(Some(byte)) => {
                 match byte {
                     $($patterns)|* => (),
                     _ => return lex_error!($self, $message)
                 }
             },
-            StreamValue::Err(error) => return Err(error),
-            StreamValue::EndOfFile => return lex_error!($self, $message)
+            Ok(None) => return lex_error!($self, $message),
+            Err(error) => return Err(Box::new(error)),
         }
     };
 
@@ -173,15 +167,15 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
         Self { stream }
     }
 
-    pub fn lex(&mut self) -> LexResult {
+    pub fn lex(&mut self) -> Result<Option<Token>, Box<dyn error::Error>> {
         match self.stream.peek() {
-            StreamValue::Byte(byte) => self.lex_something(byte),
-            StreamValue::Err(error) => LexResult::Err(error),
-            StreamValue::EndOfFile => LexResult::EndOfFile,
+            Ok(Some(byte)) => self.lex_something(byte),
+            Ok(None) => Ok(None),
+            Err(error) => Err(Box::new(error)),
         }
     }
 
-    fn lex_something(&mut self, byte: u8) -> LexResult {
+    fn lex_something(&mut self, byte: u8) -> Result<Option<Token>, Box<dyn error::Error>> {
         let line = self.stream.line;
         let column = self.stream.column;
 
@@ -223,12 +217,12 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
         };
 
         match result {
-            Ok(data) => LexResult::Ok(Token { data, line, column }),
-            Err(error) => LexResult::Err(error),
+            Ok(data) => Ok(Some(Token { data, line, column })),
+            Err(error) => Err(error),
         }
     }
 
-    fn lex_variable(&mut self) -> Result<TokenData, Rc<dyn error::Error>> {
+    fn lex_variable(&mut self) -> Result<TokenData, Box<dyn error::Error>> {
         /* Variables look like: (i) Strings of letters, e.g. x, alpha, Gamma; (ii) Strings
          * of letters followed by an unbraced alphanumeric subscript, e.g. x_1, alpha_zero
          * Gamma_k1; (iii) Strings of letters followed by a Latex-esque braced alphanumeric
@@ -239,7 +233,7 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
         munch_while!(self, identifier, :alpha);
 
         match self.stream.peek() {
-            StreamValue::Byte(b'_') => {
+            Ok(Some(b'_')) => {
                 identifier.push('_');
                 self.stream.forward();
             }
@@ -247,7 +241,7 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
         }
 
         match self.stream.peek() {
-            StreamValue::Byte(byte) => {
+            Ok(Some(byte)) => {
                 match byte {
                     b'a'...b'z' | b'A'...b'Z' | b'0'...b'9' => {
                         /* Case (ii) */
@@ -273,17 +267,17 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
 
                 Ok(TokenData::Variable(identifier))
             }
-            StreamValue::Err(error) => Err(error),
-            StreamValue::EndOfFile => lex_error!(self, "expected a subscript for variable"),
+            Ok(None) => lex_error!(self, "expected a subscript for variable"),
+            Err(error) => Err(Box::new(error)),
         }
     }
 
-    fn lex_decimal(&mut self) -> Result<TokenData, Rc<dyn error::Error>> {
+    fn lex_decimal(&mut self) -> Result<TokenData, Box<dyn error::Error>> {
         let mut value = String::new();
         munch_while!(self, value, :numeric);
 
         match self.stream.peek() {
-            StreamValue::Byte(byte) => {
+            Ok(Some(byte)) => {
                 if byte == b'.' {
                     value.push('.');
                     self.stream.forward();
@@ -291,16 +285,16 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
                     munch_while!(self, value, :numeric);
                 }
             }
-            StreamValue::Err(error) => return Err(error),
-            StreamValue::EndOfFile => return Ok(TokenData::Decimal(value)),
+            Ok(None) => return Ok(TokenData::Decimal(value)),
+            Err(error) => return Err(Box::new(error)),
         }
 
         match self.stream.peek() {
-            StreamValue::Byte(byte) => {
+            Ok(Some(byte)) => {
                 if byte == b'e' || byte == b'E' {
                     value.push('e');
                     self.stream.forward();
-                    if let StreamValue::Byte(byte) = self.stream.peek() {
+                    if let Ok(Some(byte)) = self.stream.peek() {
                         match byte {
                             b'-' => {
                                 value.push('-');
@@ -317,22 +311,22 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
                 }
                 Ok(TokenData::Decimal(value))
             }
-            StreamValue::Err(error) => Err(error),
-            StreamValue::EndOfFile => Ok(TokenData::Decimal(value)),
+            Ok(None) => Ok(TokenData::Decimal(value)),
+            Err(error) => Err(Box::new(error)),
         }
     }
 
-    fn lex_comment(&mut self) -> Result<TokenData, Rc<dyn error::Error>> {
+    fn lex_comment(&mut self) -> Result<TokenData, Box<dyn error::Error>> {
         skip_until!(self, b'\r' | b'\n');
         Ok(TokenData::Comment)
     }
 
-    fn lex_whitespace(&mut self) -> Result<TokenData, Rc<dyn error::Error>> {
+    fn lex_whitespace(&mut self) -> Result<TokenData, Box<dyn error::Error>> {
         skip_while!(self, :whitespace);
         Ok(TokenData::Whitespace)
     }
 
-    fn lex_end_of_line(&mut self) -> Result<TokenData, Rc<dyn error::Error>> {
+    fn lex_end_of_line(&mut self) -> Result<TokenData, Box<dyn error::Error>> {
         skip_while!(self, b'\r' | b'\n');
         Ok(TokenData::EndOfLine)
     }

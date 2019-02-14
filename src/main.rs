@@ -5,7 +5,7 @@ mod stream;
 use stream::Stream;
 
 mod lexer;
-use lexer::{LexResult, Lexer, TokenData};
+use lexer::{Lexer, TokenData};
 
 fn main() {
     let stdin = io::stdin();
@@ -15,7 +15,7 @@ fn main() {
 
     loop {
         match lexer.lex() {
-            LexResult::Ok(token) => {
+            Ok(Some(token)) => {
                 let description = match token.data {
                     TokenData::Variable(identifier) => "variable ".to_string() + &identifier,
                     TokenData::Decimal(value) => "decimal ".to_string() + &value,
@@ -30,11 +30,11 @@ fn main() {
                 };
                 println!("{}:{}: {}", token.line, token.column, description);
             }
-            LexResult::EndOfFile => {
+            Ok(None) => {
                 println!("End of file");
                 break;
             }
-            LexResult::Err(error) => {
+            Err(error) => {
                 println!("Error: {}", error);
                 break;
             }
