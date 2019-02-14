@@ -13,19 +13,27 @@ macro_rules! lex_error {
     };
 }
 
+macro_rules! peek {
+    ($self:ident) => {{
+        match $self.stream.peek() {
+            Ok(value) => value,
+            Err(error) => return Err(ErrorBox::from_io_error(error)),
+        }
+    }};
+}
+
 macro_rules! consume {
     ($self:ident, $( $patterns:pat )|+, $matched:ident, $unmatched:ident) => {
         loop {
-            match $self.stream.peek() {
-                Ok(Some(byte)) => {
+            match peek!($self) {
+                Some(byte) => {
                     match byte {
                         $($patterns)|* => $matched!(byte),
                         _ => $unmatched!(byte)
                     }
                     $self.stream.forward()
                 },
-                Ok(None) => break,
-                Err(error) => return Err(ErrorBox::from_io_error(error)),
+                None => break,
             }
         }
     };
@@ -85,15 +93,14 @@ macro_rules! skip_until {
 
 macro_rules! assert_byte {
     ($self: ident, $( $patterns:pat )|+, $message:expr) => {
-        match $self.stream.peek() {
-            Ok(Some(byte)) => {
+        match peek!($self) {
+            Some(byte) => {
                 match byte {
                     $($patterns)|* => (),
                     _ => return lex_error!($self, $message)
                 }
             },
-            Ok(None) => return lex_error!($self, $message),
-            Err(error) => return Err(ErrorBox::from_io_error(error)),
+            None => return lex_error!($self, $message),
         }
     };
 
@@ -135,10 +142,9 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
     }
 
     pub fn lex(&mut self) -> Result<Option<Token>, ErrorBox> {
-        match self.stream.peek() {
-            Ok(Some(byte)) => self.lex_something(byte),
-            Ok(None) => Ok(None),
-            Err(error) => Err(ErrorBox::from_io_error(error)),
+        match peek!(self) {
+            Some(byte) => self.lex_something(byte),
+            None => Ok(None),
         }
     }
 
@@ -199,16 +205,16 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
         let mut identifier = String::new();
         munch_while!(self, identifier, :alpha);
 
-        match self.stream.peek() {
-            Ok(Some(b'_')) => {
+        match peek!(self) {
+            Some(b'_') => {
                 identifier.push('_');
                 self.stream.forward();
             }
             _ => return Ok(TokenData::Variable { identifier }), /* Case (i) */
         }
 
-        match self.stream.peek() {
-            Ok(Some(byte)) => {
+        match peek!(self) {
+            Some(byte) => {
                 match byte {
                     b'a'...b'z' | b'A'...b'Z' | b'0'...b'9' => {
                         /* Case (ii) */
@@ -234,8 +240,7 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
 
                 Ok(TokenData::Variable { identifier })
             }
-            Ok(None) => lex_error!(self, "expected a subscript for variable"),
-            Err(error) => Err(ErrorBox::from_io_error(error)),
+            None => lex_error!(self, "expected a subscript for variable"),
         }
     }
 
@@ -243,8 +248,8 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
         let mut value = String::new();
         munch_while!(self, value, :numeric);
 
-        match self.stream.peek() {
-            Ok(Some(byte)) => {
+        match peek!(self) {
+            Some(byte) => {
                 if byte == b'.' {
                     value.push('.');
                     self.stream.forward();
@@ -252,17 +257,16 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
                     munch_while!(self, value, :numeric);
                 }
             }
-            Ok(None) => return Ok(TokenData::Decimal { value }),
-            Err(error) => return Err(ErrorBox::from_io_error(error)),
+            None => return Ok(TokenData::Decimal { value }),
         }
 
-        match self.stream.peek() {
-            Ok(Some(byte)) => {
+        match peek!(self) {
+            Some(byte) => {
                 if byte == b'e' || byte == b'E' {
                     value.push('e');
                     self.stream.forward();
-                    if let Ok(Some(byte)) = self.stream.peek() {
-                        match byte {
+                    match peek!(self) {
+                        Some(byte) => match byte {
                             b'-' => {
                                 value.push('-');
                                 self.stream.forward();
@@ -271,15 +275,15 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
                                 self.stream.forward();
                             }
                             _ => (),
-                        }
+                        },
+                        _ => (),
                     }
                     assert_byte!(self, :numeric, "expected an optional sign followed by an integer in exponential part of decimal");
                     munch_while!(self, value, :numeric);
                 }
                 Ok(TokenData::Decimal { value })
             }
-            Ok(None) => Ok(TokenData::Decimal { value }),
-            Err(error) => Err(ErrorBox::from_io_error(error)),
+            None => Ok(TokenData::Decimal { value }),
         }
     }
 
