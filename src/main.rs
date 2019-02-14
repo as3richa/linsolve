@@ -1,11 +1,12 @@
 use std::io;
 use std::io::Read;
 
-mod stream;
-use stream::Stream;
-
+mod errors;
 mod lexer;
+mod stream;
+
 use lexer::{Lexer, TokenData};
+use stream::Stream;
 
 fn main() {
     let stdin = io::stdin();

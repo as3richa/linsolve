@@ -1,47 +1,14 @@
-use std::boxed::Box;
-use std::error;
-use std::fmt;
 use std::io;
 
+use crate::errors::{ErrorBox, LexError};
 use crate::stream::Stream;
-
-#[derive(Debug)]
-struct LexError {
-    desc: String,
-}
-
-impl LexError {
-    fn new(filename: &str, line: u32, column: u32, message: &str) -> LexError {
-        let mut desc = filename.to_string();
-        desc += ":";
-        desc += &line.to_string();
-        desc += ":";
-        desc += &column.to_string();
-        desc += ": ";
-        desc += message;
-        LexError { desc }
-    }
-}
-
-impl fmt::Display for LexError {
-    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        write!(formatter, "{}", &self.desc)
-    }
-}
-
-impl error::Error for LexError {
-    fn description(&self) -> &str {
-        &self.desc
-    }
-}
 
 macro_rules! lex_error {
     ($self:ident, $( $format_params:expr ),+) => {
         {
             let message = format!($($format_params),*);
             let error = LexError::new(&$self.stream.filename, $self.stream.line, $self.stream.column, &message);
-            let boxed: Box<error::Error> = Box::new(error);
-            Err(boxed)
+            Err(ErrorBox::from_lex_error(error))
         }
     };
 }
@@ -58,7 +25,7 @@ macro_rules! consume {
                     $self.stream.forward()
                 },
                 Ok(None) => break,
-                Err(error) => return Err(Box::new(error)),
+                Err(error) => return Err(ErrorBox::from_io_error(error)),
             }
         }
     };
@@ -126,7 +93,7 @@ macro_rules! assert_byte {
                 }
             },
             Ok(None) => return lex_error!($self, $message),
-            Err(error) => return Err(Box::new(error)),
+            Err(error) => return Err(ErrorBox::from_io_error(error)),
         }
     };
 
@@ -167,15 +134,15 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
         Self { stream }
     }
 
-    pub fn lex(&mut self) -> Result<Option<Token>, Box<dyn error::Error>> {
+    pub fn lex(&mut self) -> Result<Option<Token>, ErrorBox> {
         match self.stream.peek() {
             Ok(Some(byte)) => self.lex_something(byte),
             Ok(None) => Ok(None),
-            Err(error) => Err(Box::new(error)),
+            Err(error) => Err(ErrorBox::from_io_error(error)),
         }
     }
 
-    fn lex_something(&mut self, byte: u8) -> Result<Option<Token>, Box<dyn error::Error>> {
+    fn lex_something(&mut self, byte: u8) -> Result<Option<Token>, ErrorBox> {
         let line = self.stream.line;
         let column = self.stream.column;
 
@@ -222,7 +189,7 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
         }
     }
 
-    fn lex_variable(&mut self) -> Result<TokenData, Box<dyn error::Error>> {
+    fn lex_variable(&mut self) -> Result<TokenData, ErrorBox> {
         /* Variables look like: (i) Strings of letters, e.g. x, alpha, Gamma; (ii) Strings
          * of letters followed by an unbraced alphanumeric subscript, e.g. x_1, alpha_zero
          * Gamma_k1; (iii) Strings of letters followed by a Latex-esque braced alphanumeric
@@ -268,11 +235,11 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
                 Ok(TokenData::Variable { identifier })
             }
             Ok(None) => lex_error!(self, "expected a subscript for variable"),
-            Err(error) => Err(Box::new(error)),
+            Err(error) => Err(ErrorBox::from_io_error(error)),
         }
     }
 
-    fn lex_decimal(&mut self) -> Result<TokenData, Box<dyn error::Error>> {
+    fn lex_decimal(&mut self) -> Result<TokenData, ErrorBox> {
         let mut value = String::new();
         munch_while!(self, value, :numeric);
 
@@ -286,7 +253,7 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
                 }
             }
             Ok(None) => return Ok(TokenData::Decimal { value }),
-            Err(error) => return Err(Box::new(error)),
+            Err(error) => return Err(ErrorBox::from_io_error(error)),
         }
 
         match self.stream.peek() {
@@ -312,21 +279,21 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
                 Ok(TokenData::Decimal { value })
             }
             Ok(None) => Ok(TokenData::Decimal { value }),
-            Err(error) => Err(Box::new(error)),
+            Err(error) => Err(ErrorBox::from_io_error(error)),
         }
     }
 
-    fn lex_comment(&mut self) -> Result<TokenData, Box<dyn error::Error>> {
+    fn lex_comment(&mut self) -> Result<TokenData, ErrorBox> {
         skip_until!(self, b'\r' | b'\n');
         Ok(TokenData::Comment)
     }
 
-    fn lex_whitespace(&mut self) -> Result<TokenData, Box<dyn error::Error>> {
+    fn lex_whitespace(&mut self) -> Result<TokenData, ErrorBox> {
         skip_while!(self, :whitespace);
         Ok(TokenData::Whitespace)
     }
 
-    fn lex_end_of_line(&mut self) -> Result<TokenData, Box<dyn error::Error>> {
+    fn lex_end_of_line(&mut self) -> Result<TokenData, ErrorBox> {
         skip_while!(self, b'\r' | b'\n');
         Ok(TokenData::EndOfLine)
     }
