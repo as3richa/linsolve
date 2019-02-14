@@ -140,8 +140,8 @@ macro_rules! assert_byte {
 }
 
 pub enum TokenData {
-    Variable(String),
-    Decimal(String),
+    Variable { identifier: String },
+    Decimal { value: String },
     Plus,
     Minus,
     Times,
@@ -237,7 +237,7 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
                 identifier.push('_');
                 self.stream.forward();
             }
-            _ => return Ok(TokenData::Variable(identifier)), /* Case (i) */
+            _ => return Ok(TokenData::Variable { identifier }), /* Case (i) */
         }
 
         match self.stream.peek() {
@@ -265,7 +265,7 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
                     }
                 }
 
-                Ok(TokenData::Variable(identifier))
+                Ok(TokenData::Variable { identifier })
             }
             Ok(None) => lex_error!(self, "expected a subscript for variable"),
             Err(error) => Err(Box::new(error)),
@@ -285,7 +285,7 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
                     munch_while!(self, value, :numeric);
                 }
             }
-            Ok(None) => return Ok(TokenData::Decimal(value)),
+            Ok(None) => return Ok(TokenData::Decimal { value }),
             Err(error) => return Err(Box::new(error)),
         }
 
@@ -309,9 +309,9 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
                     assert_byte!(self, :numeric, "expected an optional sign followed by an integer in exponential part of decimal");
                     munch_while!(self, value, :numeric);
                 }
-                Ok(TokenData::Decimal(value))
+                Ok(TokenData::Decimal { value })
             }
-            Ok(None) => Ok(TokenData::Decimal(value)),
+            Ok(None) => Ok(TokenData::Decimal { value }),
             Err(error) => Err(Box::new(error)),
         }
     }
