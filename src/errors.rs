@@ -4,12 +4,12 @@ use std::io;
 use std::ops::Deref;
 
 pub enum ErrorBox {
-    Lex(LexError),
+    Lex(ParseOrLexError),
     Io(io::Error),
 }
 
 impl ErrorBox {
-    pub fn from_lex_error(error: LexError) -> ErrorBox {
+    pub fn from_lex_error(error: ParseOrLexError) -> ErrorBox {
         ErrorBox::Lex(error)
     }
 
@@ -36,12 +36,15 @@ impl fmt::Display for ErrorBox {
 }
 
 #[derive(Debug)]
-pub struct LexError {
+pub struct ParseOrLexError {
     desc: String,
 }
 
-impl LexError {
-    pub fn new(filename: &str, line: u32, column: u32, message: &str) -> LexError {
+pub type LexError = ParseOrLexError;
+pub type ParseError = ParseOrLexError;
+
+impl ParseOrLexError {
+    pub fn new(filename: &str, line: u32, column: u32, message: &str) -> ParseOrLexError {
         let mut desc = filename.to_string();
         desc += ":";
         desc += &line.to_string();
@@ -49,17 +52,17 @@ impl LexError {
         desc += &column.to_string();
         desc += ": ";
         desc += message;
-        LexError { desc }
+        ParseOrLexError { desc }
     }
 }
 
-impl fmt::Display for LexError {
+impl fmt::Display for ParseOrLexError {
     fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
         write!(formatter, "{}", &self.desc)
     }
 }
 
-impl error::Error for LexError {
+impl error::Error for ParseOrLexError {
     fn description(&self) -> &str {
         &self.desc
     }

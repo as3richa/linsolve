@@ -24,17 +24,12 @@ macro_rules! peek {
 
 macro_rules! consume {
     ($self:ident, $( $patterns:pat )|+, $matched:ident, $unmatched:ident) => {
-        loop {
-            match peek!($self) {
-                Some(byte) => {
-                    match byte {
-                        $($patterns)|* => $matched!(byte),
-                        _ => $unmatched!(byte)
-                    }
-                    $self.stream.forward()
-                },
-                None => break,
+        while let Some(byte) = peek!($self) {
+            match byte {
+                $($patterns)|* => $matched!(byte),
+                _ => $unmatched!(byte)
             }
+            $self.stream.forward();
         }
     };
 }
@@ -265,8 +260,8 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
                 if byte == b'e' || byte == b'E' {
                     value.push('e');
                     self.stream.forward();
-                    match peek!(self) {
-                        Some(byte) => match byte {
+                    if let Some(byte) = peek!(self) {
+                        match byte {
                             b'-' => {
                                 value.push('-');
                                 self.stream.forward();
@@ -275,8 +270,7 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
                                 self.stream.forward();
                             }
                             _ => (),
-                        },
-                        _ => (),
+                        }
                     }
                     assert_byte!(self, :numeric, "expected an optional sign followed by an integer in exponential part of decimal");
                     munch_while!(self, value, :numeric);
