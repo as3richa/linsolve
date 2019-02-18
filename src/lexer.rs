@@ -87,7 +87,7 @@ macro_rules! skip_until {
 }
 
 macro_rules! assert_byte {
-    ($self: ident, $( $patterns:pat )|+, $message:expr) => {
+    ($self:ident, $( $patterns:pat )|+, $message:expr) => {
         match peek!($self) {
             Some(byte) => {
                 match byte {
@@ -109,8 +109,8 @@ macro_rules! assert_byte {
 }
 
 pub enum TokenData {
-    Variable { identifier: String },
-    Decimal { value: String },
+    Variable(String),
+    Decimal(String),
     Plus,
     Minus,
     Times,
@@ -128,7 +128,7 @@ pub struct Token {
 }
 
 pub struct Lexer<I: Iterator<Item = Result<u8, io::Error>>> {
-    stream: Stream<I>,
+    pub stream: Stream<I>,
 }
 
 impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
@@ -205,7 +205,7 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
                 identifier.push('_');
                 self.stream.forward();
             }
-            _ => return Ok(TokenData::Variable { identifier }), /* Case (i) */
+            _ => return Ok(TokenData::Variable(identifier)), /* Case (i) */
         }
 
         match peek!(self) {
@@ -233,7 +233,7 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
                     }
                 }
 
-                Ok(TokenData::Variable { identifier })
+                Ok(TokenData::Variable(identifier))
             }
             None => lex_error!(self, "expected a subscript for variable"),
         }
@@ -252,7 +252,7 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
                     munch_while!(self, value, :numeric);
                 }
             }
-            None => return Ok(TokenData::Decimal { value }),
+            None => return Ok(TokenData::Decimal(value)),
         }
 
         match peek!(self) {
@@ -272,12 +272,12 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
                             _ => (),
                         }
                     }
-                    assert_byte!(self, :numeric, "expected an optional sign followed by an integer in exponential part of decimal");
+                    assert_byte!(self, :numeric, "expected an optional sign followed by an integer in exponential part of value");
                     munch_while!(self, value, :numeric);
                 }
-                Ok(TokenData::Decimal { value })
+                Ok(TokenData::Decimal(value))
             }
-            None => Ok(TokenData::Decimal { value }),
+            None => Ok(TokenData::Decimal(value)),
         }
     }
 
