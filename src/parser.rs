@@ -21,12 +21,55 @@ macro_rules! parse_error {
     }};
 }
 
-macro_rules! token_data_matches {
-    ($maybe_token:ident, $data:pat) => {{
-        if let Some(Token { data: $data, .. }) = $maybe_token {
-            true
-        } else {
-            false
+macro_rules! is_end_of_line {
+    ($token:ident) => {{
+        match $token {
+            Some(Token {
+                data: TokenData::EndOfLine,
+                ..
+            }) => true,
+            _ => false,
+        }
+    }};
+}
+
+macro_rules! is_end_of_line_or_file {
+    ($token:ident) => {{
+        match $token {
+            None
+            | Some(Token {
+                data: TokenData::EndOfLine,
+                ..
+            }) => true,
+            _ => false,
+        }
+    }};
+}
+
+macro_rules! is_equals {
+    ($token:ident) => {{
+        match $token {
+            Some(Token {
+                data: TokenData::Equals,
+                ..
+            }) => true,
+            _ => false,
+        }
+    }};
+}
+
+macro_rules! is_plus_or_minus {
+    ($token:ident) => {{
+        match $token {
+            Some(Token {
+                data: TokenData::Plus,
+                ..
+            }) => true,
+            Some(Token {
+                data: TokenData::Minus,
+                ..
+            }) => true,
+            _ => false,
         }
     }};
 }
@@ -38,85 +81,93 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Parser<I> {
     }
 
     pub fn parse(&mut self) -> Result<(), ErrorBox> {
-        let mut token = self.lex()?;
-
-        while let Some(_) = token {
-            if token_data_matches!(token, TokenData::EndOfLine) {
-                continue;
-            }
-
-            println!("LHS");
-
-            loop {
-                let (term, next_token) = self.parse_term(token)?;
-                token = next_token;
-
-                println!("{:?}", term);
-
-                if !token_data_matches!(token, TokenData::Plus)
-                    && !token_data_matches!(token, TokenData::Minus)
-                {
-                    break;
-                }
-            }
-
-            match token {
-                Some(ref wrapped) => {
-                    match wrapped.data {
-                        TokenData::Equals => (),
-                        _ => {
-                            return parse_error!(
-                                self.lexer.stream.filename,
-                                wrapped.line,
-                                wrapped.column,
-                                "expected an equals sign"
-                            );
-                        }
-                    };
-                }
-                None => (),
-            }
-
-            token = self.lex()?;
-
-            println!("RHS");
-
-            loop {
-                let (term, next_token) = self.parse_term(token)?;
-                token = next_token;
-
-                println!("{:?}", term);
-
-                if !token_data_matches!(token, TokenData::Plus)
-                    && !token_data_matches!(token, TokenData::Minus)
-                {
-                    break;
-                }
-            }
-
-            match token {
-                Some(ref wrapped) => {
-                    match wrapped.data {
-                        TokenData::EndOfLine => (),
-                        _ => {
-                            return parse_error!(
-                                self.lexer.stream.filename,
-                                wrapped.line,
-                                wrapped.column,
-                                "expected a new line or the end of the file"
-                            );
-                        }
-                    };
-                }
-                None => (),
-            }
-
-            token = self.lex()?;
-
-            println!("End\n\n\n");
+        loop {
+            println!("Left-hand side:");
+            let lhs = match self.parse_lhs()? {
+                Some(expr) => expr,
+                None => break,
+            };
+            println!("Right-hand side:");
+            let rhs = self.parse_rhs()?;
         }
 
         Ok(())
+    }
+
+    fn parse_lhs(&mut self) -> Result<Option<()>, ErrorBox> {
+        let first_token = {
+            loop {
+                let token = self.lex()?;
+                if !is_end_of_line!(token) {
+                    break token;
+                }
+            }
+        };
+
+        if is_end_of_line_or_file!(first_token) {
+            return Ok(None);
+        }
+
+        let (expr, last_token) = self.parse_expr(first_token)?;
+
+        if !is_equals!(last_token) {
+            let (line, column) = self.line_and_column(last_token);
+            return parse_error!(
+                self.lexer.stream.filename,
+                line,
+                column,
+                "expected `=` after left-hand side of equation"
+            );
+        }
+
+        Ok(Some(expr))
+    }
+
+    fn parse_rhs(&mut self) -> Result<(), ErrorBox> {
+        let first_token = self.lex()?;
+
+        if is_end_of_line_or_file!(first_token) {
+            let (line, column) = self.line_and_column(first_token);
+            return parse_error!(
+                self.lexer.stream.filename,
+                line,
+                column,
+                "expected an expr after `=`"
+            );
+        }
+
+        let (expr, last_token) = self.parse_expr(first_token)?;
+
+        if !is_end_of_line_or_file!(last_token) {
+            let (line, column) = self.line_and_column(last_token);
+            return parse_error!(
+                self.lexer.stream.filename,
+                line,
+                column,
+                "expected end of line or end of file after right-hand side of equation"
+            );
+        }
+
+        Ok(expr)
+    }
+
+    fn parse_expr(&mut self, first_token: Option<Token>) -> Result<((), Option<Token>), ErrorBox> {
+        let mut token = first_token;
+
+        loop {
+            let (term, next_token) = self.parse_term(token)?;
+            token = next_token;
+
+            println!("{:?}", term);
+
+            if is_plus_or_minus!(token) {
+                continue;
+            }
+
+            break;
+        }
+
+        Ok(((), token))
     }
 
     fn parse_term(&mut self, mut token: Option<Token>) -> Result<(Term, Option<Token>), ErrorBox> {
@@ -131,12 +182,7 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Parser<I> {
         let mut state = State::Empty;
         let mut last: Option<Token> = None;
 
-        loop {
-            let unwrapped = match token {
-                Some(wrapped) => wrapped,
-                None => break,
-            };
-
+        while let Some(unwrapped) = token {
             match unwrapped.data {
                 TokenData::Variable(identifier) => {
                     state = match state {
@@ -326,6 +372,13 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Parser<I> {
             }
 
             return result;
+        }
+    }
+
+    fn line_and_column(&self, token: Option<Token>) -> (u32, u32) {
+        match token {
+            Some(unwrapped) => (unwrapped.line, unwrapped.column),
+            None => (self.lexer.stream.line, self.lexer.stream.column),
         }
     }
 }
