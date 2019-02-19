@@ -62,12 +62,10 @@ macro_rules! is_plus_or_minus {
     ($token:ident) => {{
         match $token {
             Some(Token {
-                data: TokenData::Plus,
-                ..
+                data: TokenData::Plus, ..
             }) => true,
             Some(Token {
-                data: TokenData::Minus,
-                ..
+                data: TokenData::Minus, ..
             }) => true,
             _ => false,
         }
@@ -128,12 +126,7 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Parser<I> {
 
         if is_end_of_line_or_file!(first_token) {
             let (line, column) = self.line_and_column(first_token);
-            return parse_error!(
-                self.lexer.stream.filename,
-                line,
-                column,
-                "expected an expr after `=`"
-            );
+            return parse_error!(self.lexer.stream.filename, line, column, "expected an expr after `=`");
         }
 
         let (expr, last_token) = self.parse_expr(first_token)?;
@@ -207,9 +200,7 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Parser<I> {
                         State::Empty | State::Plus => State::Constant(value),
                         State::Minus => State::Constant(-1.0 * value),
                         State::Constant(coeff) => State::Constant(coeff * value),
-                        State::Linear(coeff, identifier) => {
-                            State::Linear(coeff * value, identifier)
-                        }
+                        State::Linear(coeff, identifier) => State::Linear(coeff * value, identifier),
                     };
                 }
 
@@ -256,9 +247,7 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Parser<I> {
                                     );
                                 }
                                 State::Constant(coeff) => State::Constant(coeff * value),
-                                State::Linear(coeff, identifier) => {
-                                    State::Linear(coeff * value, identifier)
-                                }
+                                State::Linear(coeff, identifier) => State::Linear(coeff * value, identifier),
                             };
                         }
                         _ => {
@@ -299,9 +288,7 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Parser<I> {
                                     );
                                 }
                                 State::Constant(coeff) => State::Constant(coeff / value),
-                                State::Linear(coeff, identifier) => {
-                                    State::Linear(coeff / value, identifier)
-                                }
+                                State::Linear(coeff, identifier) => State::Linear(coeff / value, identifier),
                             };
                         }
                         _ => {

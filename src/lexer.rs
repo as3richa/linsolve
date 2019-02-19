@@ -167,14 +167,9 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
             }
 
             /* Printable ASCII that isn't a valid leading character for a token */
-            b'!'
-            | b'"'
-            | b'$'...b')'
-            | b','
-            | b':'...b'<'
-            | b'>'...b'@'
-            | b'['...b'`'
-            | b'{'...b'~' => lex_error!(self, "unexpected character {}", byte as char),
+            b'!' | b'"' | b'$'...b')' | b',' | b':'...b'<' | b'>'...b'@' | b'['...b'`' | b'{'...b'~' => {
+                lex_error!(self, "unexpected character {}", byte as char)
+            }
 
             /* Unprintable ASCII, or a byte that isn't valid ASCII */
             _ => lex_error!(
@@ -229,7 +224,10 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Lexer<I> {
                         self.stream.forward();
                     }
                     _ => {
-                        return lex_error!(self, "expected an alphanumeric or braced-alphanumeric subscript for variable");
+                        return lex_error!(
+                            self,
+                            "expected an alphanumeric or braced-alphanumeric subscript for variable"
+                        );
                     }
                 }
 
