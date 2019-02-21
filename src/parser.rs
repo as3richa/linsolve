@@ -15,60 +15,19 @@ enum Term {
 }
 
 macro_rules! parse_error {
-    ($filename:expr, $line:expr, $column:expr, $message:expr) => {{
-        let error = ParseError::new(&$filename, $line, $column, &$message);
+    ($self:ident, $token:ident, $message:expr) => {{
+        let error = ParseError::new(&$self.lexer.stream.filename, $token.line, $token.column, &$message);
         Err(ErrorBox::from_parse_error(error))
     }};
-}
 
-macro_rules! is_end_of_line {
-    ($token:ident) => {{
-        match $token {
-            Some(Token {
-                data: TokenData::EndOfLine,
-                ..
-            }) => true,
-            _ => false,
-        }
-    }};
-}
-
-macro_rules! is_end_of_line_or_file {
-    ($token:ident) => {{
-        match $token {
-            None
-            | Some(Token {
-                data: TokenData::EndOfLine,
-                ..
-            }) => true,
-            _ => false,
-        }
-    }};
-}
-
-macro_rules! is_equals {
-    ($token:ident) => {{
-        match $token {
-            Some(Token {
-                data: TokenData::Equals,
-                ..
-            }) => true,
-            _ => false,
-        }
-    }};
-}
-
-macro_rules! is_plus_or_minus {
-    ($token:ident) => {{
-        match $token {
-            Some(Token {
-                data: TokenData::Plus, ..
-            }) => true,
-            Some(Token {
-                data: TokenData::Minus, ..
-            }) => true,
-            _ => false,
-        }
+    ($self:ident, $message:expr) => {{
+        let error = ParseError::new(
+            &$self.lexer.stream.filename,
+            $self.lexer.stream.line,
+            $self.lexer.stream.column,
+            &$message,
+        );
+        Err(ErrorBox::from_parse_error(error))
     }};
 }
 
@@ -81,89 +40,85 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Parser<I> {
     pub fn parse(&mut self) -> Result<(), ErrorBox> {
         loop {
             println!("Left-hand side:");
-            let lhs = match self.parse_lhs()? {
+            let lhs_ = match self.parse_lhs()? {
                 Some(expr) => expr,
                 None => break,
             };
             println!("Right-hand side:");
-            let rhs = self.parse_rhs()?;
+            let rhs_ = self.parse_rhs()?;
         }
 
         Ok(())
     }
 
     fn parse_lhs(&mut self) -> Result<Option<()>, ErrorBox> {
-        let first_token = {
+        let first = {
             loop {
-                let token = self.lex()?;
-                if !is_end_of_line!(token) {
-                    break token;
+                match self.lex()? {
+                    Some(token) => match token.data {
+                        TokenData::EndOfLine => continue,
+                        _ => break token,
+                    },
+                    None => return Ok(None),
                 }
             }
         };
 
-        if is_end_of_line_or_file!(first_token) {
-            return Ok(None);
+        let (expr, last) = self.parse_expr(first)?;
+
+        match last {
+            Some(last) => match last.data {
+                TokenData::Equals => Ok(Some(expr)),
+                _ => parse_error!(self, last, "expected `=` after left-hand side of equation"),
+            },
+            None => parse_error!(self, "expected `=` after left-hand side of equation"),
         }
-
-        let (expr, last_token) = self.parse_expr(first_token)?;
-
-        if !is_equals!(last_token) {
-            let (line, column) = self.line_and_column(last_token);
-            return parse_error!(
-                self.lexer.stream.filename,
-                line,
-                column,
-                "expected `=` after left-hand side of equation"
-            );
-        }
-
-        Ok(Some(expr))
     }
 
     fn parse_rhs(&mut self) -> Result<(), ErrorBox> {
-        let first_token = self.lex()?;
+        let first = {
+            match self.lex()? {
+                Some(token) => match token.data {
+                    TokenData::EndOfLine => return parse_error!(self, token, "expected an expression after `=`"),
+                    _ => token,
+                },
+                None => return parse_error!(self, "expected an expression after `=`"),
+            }
+        };
 
-        if is_end_of_line_or_file!(first_token) {
-            let (line, column) = self.line_and_column(first_token);
-            return parse_error!(self.lexer.stream.filename, line, column, "expected an expr after `=`");
+        let (expr, last) = self.parse_expr(first)?;
+
+        match last {
+            Some(last) => match last.data {
+                TokenData::EndOfLine => Ok(expr),
+                _ => parse_error!(self, last, "expected end of file or end of line after equation"),
+            },
+            None => Ok(expr),
         }
-
-        let (expr, last_token) = self.parse_expr(first_token)?;
-
-        if !is_end_of_line_or_file!(last_token) {
-            let (line, column) = self.line_and_column(last_token);
-            return parse_error!(
-                self.lexer.stream.filename,
-                line,
-                column,
-                "expected end of line or end of file after right-hand side of equation"
-            );
-        }
-
-        Ok(expr)
     }
 
-    fn parse_expr(&mut self, first_token: Option<Token>) -> Result<((), Option<Token>), ErrorBox> {
-        let mut token = first_token;
+    fn parse_expr(&mut self, first: Token) -> Result<((), Option<Token>), ErrorBox> {
+        let mut token = first;
 
         loop {
-            let (term, next_token) = self.parse_term(token)?;
-            token = next_token;
+            let (term, next) = self.parse_term(token)?;
 
             println!("{:?}", term);
 
-            if is_plus_or_minus!(token) {
-                continue;
+            match next {
+                Some(next) => match next.data {
+                    TokenData::Plus | TokenData::Minus => {
+                        token = next;
+                        continue;
+                    }
+                    _ => return Ok(((), Some(next))),
+                },
+                _ => return Ok(((), None)),
             }
-
-            break;
         }
-
-        Ok(((), token))
     }
 
-    fn parse_term(&mut self, mut token: Option<Token>) -> Result<(Term, Option<Token>), ErrorBox> {
+    fn parse_term(&mut self, mut token: Token) -> Result<(Term, Option<Token>), ErrorBox> {
         enum State {
             Empty,
             Plus,
@@ -175,20 +130,15 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Parser<I> {
         let mut state = State::Empty;
         let mut last: Option<Token> = None;
 
-        while let Some(unwrapped) = token {
-            match unwrapped.data {
+        loop {
+            match token.data {
                 TokenData::Variable(identifier) => {
                     state = match state {
                         State::Empty | State::Plus => State::Linear(1.0, identifier),
                         State::Minus => State::Linear(-1.0, identifier),
                         State::Constant(coeff) => State::Linear(coeff, identifier),
                         State::Linear(_, _) => {
-                            let error = parse_error!(
-                                self.lexer.stream.filename,
-                                unwrapped.line,
-                                unwrapped.column,
-                                "term is not linear"
-                            );
+                            let error = parse_error!(self, token, "term is not linear");
                             return error;
                         }
                     };
@@ -205,33 +155,19 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Parser<I> {
                 }
 
                 TokenData::Times => {
-                    let next_token = match self.lex()? {
+                    let next = match self.lex()? {
                         Some(token) => token,
-                        None => {
-                            let error = parse_error!(
-                                self.lexer.stream.filename,
-                                unwrapped.line,
-                                unwrapped.column,
-                                "expected a number or variable"
-                            );
-                            return error;
-                        }
+                        None => return parse_error!(self, "expected a number or variable"),
                     };
 
-                    match next_token.data {
+                    match next.data {
                         TokenData::Variable(identifier) => {
                             state = match state {
                                 State::Empty | State::Plus => State::Linear(1.0, identifier),
                                 State::Minus => State::Linear(-1.0, identifier),
                                 State::Constant(coeff) => State::Linear(coeff, identifier),
                                 State::Linear(_, _) => {
-                                    let error = parse_error!(
-                                        self.lexer.stream.filename,
-                                        next_token.line,
-                                        next_token.column,
-                                        "term is not linear"
-                                    );
-                                    return error;
+                                    return parse_error!(self, next, "term is not linear");
                                 }
                             };
                         }
@@ -239,66 +175,36 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Parser<I> {
                             let value = string_value.parse::<f64>().unwrap();
                             state = match state {
                                 State::Empty | State::Plus | State::Minus => {
-                                    return parse_error!(
-                                        self.lexer.stream.filename,
-                                        unwrapped.line,
-                                        unwrapped.column,
-                                        "expected a number or variable"
-                                    );
+                                    return parse_error!(self, token, "expected a number or variable");
                                 }
                                 State::Constant(coeff) => State::Constant(coeff * value),
                                 State::Linear(coeff, identifier) => State::Linear(coeff * value, identifier),
                             };
                         }
                         _ => {
-                            let error = parse_error!(
-                                self.lexer.stream.filename,
-                                next_token.line,
-                                next_token.column,
-                                "expected a number or variable"
-                            );
-                            return error;
+                            return parse_error!(self, next, "expected a number or variable");
                         }
                     }
                 }
 
                 TokenData::DividedBy => {
-                    let next_token = match self.lex()? {
+                    let next = match self.lex()? {
                         Some(token) => token,
-                        None => {
-                            return parse_error!(
-                                self.lexer.stream.filename,
-                                self.lexer.stream.line,
-                                self.lexer.stream.column,
-                                "expected a number"
-                            );
-                        }
+                        None => return parse_error!(self, "expected a number"),
                     };
 
-                    match next_token.data {
+                    match next.data {
                         TokenData::Decimal(string_value) => {
                             let value = string_value.parse::<f64>().unwrap();
                             state = match state {
                                 State::Empty | State::Plus | State::Minus => {
-                                    return parse_error!(
-                                        self.lexer.stream.filename,
-                                        unwrapped.line,
-                                        unwrapped.column,
-                                        "expected a number or variable"
-                                    );
+                                    return parse_error!(self, token, "expected a number or variable");
                                 }
                                 State::Constant(coeff) => State::Constant(coeff / value),
                                 State::Linear(coeff, identifier) => State::Linear(coeff / value, identifier),
                             };
                         }
-                        _ => {
-                            return parse_error!(
-                                self.lexer.stream.filename,
-                                next_token.line,
-                                next_token.column,
-                                "expected a number"
-                            );
-                        }
+                        _ => return parse_error!(self, next, "expected a number"),
                     }
                 }
 
@@ -307,7 +213,7 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Parser<I> {
                         State::Empty | State::Plus => State::Plus,
                         State::Minus => State::Minus,
                         _ => {
-                            last = Some(unwrapped);
+                            last = Some(token);
                             break;
                         }
                     };
@@ -318,54 +224,42 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Parser<I> {
                         State::Empty | State::Plus => State::Minus,
                         State::Minus => State::Plus,
                         _ => {
-                            last = Some(unwrapped);
+                            last = Some(token);
                             break;
                         }
                     };
                 }
 
                 TokenData::Equals | TokenData::EndOfLine => {
-                    last = Some(unwrapped);
+                    last = Some(token);
                     break;
                 }
 
                 TokenData::Whitespace | TokenData::Comment => unreachable!(),
             }
 
-            token = self.lex()?;
+            token = match self.lex()? {
+                Some(token) => token,
+                None => break,
+            }
         }
 
         match state {
             State::Constant(value) => Ok((Term::Constant(value), last)),
             State::Linear(coeff, identifier) => Ok((Term::Linear(coeff, identifier), last)),
-            State::Empty | State::Plus | State::Minus => parse_error!(
-                self.lexer.stream.filename,
-                self.lexer.stream.line,
-                self.lexer.stream.column,
-                "expected a number or variable"
-            ),
+            State::Empty | State::Plus | State::Minus => parse_error!(self, "expected a number or variable"),
         }
     }
 
     fn lex(&mut self) -> Result<Option<Token>, ErrorBox> {
         loop {
-            let result = self.lexer.lex();
-
-            if let Ok(Some(token)) = result {
-                match token.data {
+            match self.lexer.lex()? {
+                Some(token) => match token.data {
                     TokenData::Whitespace | TokenData::Comment => continue,
                     _ => return Ok(Some(token)),
-                }
+                },
+                None => return Ok(None),
             }
-
-            return result;
-        }
-    }
-
-    fn line_and_column(&self, token: Option<Token>) -> (u32, u32) {
-        match token {
-            Some(unwrapped) => (unwrapped.line, unwrapped.column),
-            None => (self.lexer.stream.line, self.lexer.stream.column),
         }
     }
 }
