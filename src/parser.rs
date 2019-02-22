@@ -1,8 +1,9 @@
 use std::io;
 
 use crate::errors::{ErrorBox, ParseError};
+use crate::lexer::{Lexer, Token, TokenData};
+use crate::linear_system::{LinearExpression, LinearSystem};
 use crate::stream::Stream;
-use lexer::{Lexer, Token, TokenData};
 
 pub struct Parser<I: Iterator<Item = Result<u8, io::Error>>> {
     lexer: Lexer<I>,
@@ -37,21 +38,18 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Parser<I> {
         Self { lexer }
     }
 
-    pub fn parse(&mut self) -> Result<(), ErrorBox> {
-        loop {
-            println!("Left-hand side:");
-            let lhs_ = match self.parse_lhs()? {
-                Some(expr) => expr,
-                None => break,
-            };
-            println!("Right-hand side:");
-            let rhs_ = self.parse_rhs()?;
+    pub fn parse(&mut self) -> Result<LinearSystem, ErrorBox> {
+        let mut system = LinearSystem::new();
+
+        while let Some(lhs) = self.parse_lhs(&mut system)? {
+            let rhs = self.parse_rhs(&mut system)?;
+            system.push_eqn(lhs, rhs);
         }
 
-        Ok(())
+        Ok(system)
     }
 
-    fn parse_lhs(&mut self) -> Result<Option<()>, ErrorBox> {
+    fn parse_lhs(&mut self, system: &mut LinearSystem) -> Result<Option<LinearExpression>, ErrorBox> {
         let first = {
             loop {
                 match self.lex()? {
@@ -64,7 +62,7 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Parser<I> {
             }
         };
 
-        let (expr, last) = self.parse_expr(first)?;
+        let (expr, last) = self.parse_expr(system, first)?;
 
         match last {
             Some(last) => match last.data {
@@ -75,7 +73,7 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Parser<I> {
         }
     }
 
-    fn parse_rhs(&mut self) -> Result<(), ErrorBox> {
+    fn parse_rhs(&mut self, system: &mut LinearSystem) -> Result<LinearExpression, ErrorBox> {
         let first = {
             match self.lex()? {
                 Some(token) => match token.data {
@@ -86,7 +84,7 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Parser<I> {
             }
         };
 
-        let (expr, last) = self.parse_expr(first)?;
+        let (expr, last) = self.parse_expr(system, first)?;
 
         match last {
             Some(last) => match last.data {
@@ -97,13 +95,21 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Parser<I> {
         }
     }
 
-    fn parse_expr(&mut self, first: Token) -> Result<((), Option<Token>), ErrorBox> {
+    fn parse_expr(
+        &mut self,
+        system: &mut LinearSystem,
+        first: Token,
+    ) -> Result<(LinearExpression, Option<Token>), ErrorBox> {
         let mut token = first;
+        let mut expr = system.new_expr();
 
         loop {
             let (term, next) = self.parse_term(token)?;
 
-            println!("{:?}", term);
+            match term {
+                Term::Constant(value) => system.add_constant_to_expr(&mut expr, value),
+                Term::Linear(coeff, identifier) => system.add_linear_term_to_expr(&mut expr, coeff, identifier),
+            }
 
             match next {
                 Some(next) => match next.data {
@@ -111,9 +117,9 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Parser<I> {
                         token = next;
                         continue;
                     }
-                    _ => return Ok(((), Some(next))),
+                    _ => return Ok((expr, Some(next))),
                 },
-                _ => return Ok(((), None)),
+                _ => return Ok((expr, None)),
             }
         }
     }

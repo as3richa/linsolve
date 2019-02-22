@@ -3,6 +3,7 @@ use std::io::Read;
 
 mod errors;
 mod lexer;
+mod linear_system;
 mod parser;
 mod stream;
 
@@ -14,7 +15,8 @@ fn main() {
     let handle = stdin.lock();
     let stream = Stream::new("<standard input>".to_string(), handle.bytes());
     let mut parser = Parser::new(stream);
-    if let Err(error) = parser.parse() {
-        println!("{}", error);
+    match parser.parse() {
+        Ok(system) => println!("{:?}", system),
+        Err(err) => println!("{}", err),
     }
 }
