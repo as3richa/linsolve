@@ -1,12 +1,12 @@
-use std::io;
+use std::io::Read;
 
 use crate::errors::{ErrorBox, ParseError};
-use crate::lexer::{Lexer, Token, TokenData};
+use crate::lexer::{lex, Token, TokenData};
 use crate::linear_system::{LinearExpression, LinearSystem};
 use crate::stream::Stream;
 
-pub struct Parser<I: Iterator<Item = Result<u8, io::Error>>> {
-    lexer: Lexer<I>,
+pub struct Parser<R: Read> {
+    stream: Stream<R>,
 }
 
 #[derive(Debug)]
@@ -17,25 +17,24 @@ enum Term {
 
 macro_rules! parse_error {
     ($self:ident, $token:ident, $message:expr) => {{
-        let error = ParseError::new(&$self.lexer.stream.filename, $token.line, $token.column, &$message);
+        let error = ParseError::new(&$self.stream.filename, $token.line, $token.column, &$message);
         Err(ErrorBox::from_parse_error(error))
     }};
 
     ($self:ident, $message:expr) => {{
         let error = ParseError::new(
-            &$self.lexer.stream.filename,
-            $self.lexer.stream.line,
-            $self.lexer.stream.column,
+            &$self.stream.filename,
+            $self.stream.line,
+            $self.stream.column,
             &$message,
         );
         Err(ErrorBox::from_parse_error(error))
     }};
 }
 
-impl<I: Iterator<Item = Result<u8, io::Error>>> Parser<I> {
-    pub fn new(stream: Stream<I>) -> Parser<I> {
-        let lexer = Lexer::new(stream);
-        Self { lexer }
+impl<R: Read> Parser<R> {
+    pub fn new(stream: Stream<R>) -> Parser<R> {
+        Self { stream }
     }
 
     pub fn parse(&mut self) -> Result<LinearSystem, ErrorBox> {
@@ -259,7 +258,7 @@ impl<I: Iterator<Item = Result<u8, io::Error>>> Parser<I> {
 
     fn lex(&mut self) -> Result<Option<Token>, ErrorBox> {
         loop {
-            match self.lexer.lex()? {
+            match lex(&mut self.stream)? {
                 Some(token) => match token.data {
                     TokenData::Whitespace | TokenData::Comment => continue,
                     _ => return Ok(Some(token)),

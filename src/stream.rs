@@ -1,15 +1,16 @@
 use std::io;
+use std::io::{Bytes, Read};
 
-pub struct Stream<I: Iterator<Item = Result<u8, io::Error>>> {
+pub struct Stream<R: Read> {
     pub filename: String,
     pub line: u32,
     pub column: u32,
     peeked: Option<u8>,
-    iter: I,
+    iter: Bytes<R>,
 }
 
-impl<I: Iterator<Item = Result<u8, io::Error>>> Stream<I> {
-    pub fn new(filename: String, iter: I) -> Stream<I> {
+impl<R: Read> Stream<R> {
+    pub fn new(filename: String, iter: Bytes<R>) -> Stream<R> {
         Self {
             filename,
             line: 1,
