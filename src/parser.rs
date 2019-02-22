@@ -51,7 +51,7 @@ impl<R: Read> Parser<R> {
     fn parse_lhs(&mut self, system: &mut LinearSystem) -> Result<Option<LinearExpression>, ErrorBox> {
         let first = {
             loop {
-                match self.lex()? {
+                match lex(&mut self.stream)? {
                     Some(token) => match token.data {
                         TokenData::EndOfLine => continue,
                         _ => break token,
@@ -74,7 +74,7 @@ impl<R: Read> Parser<R> {
 
     fn parse_rhs(&mut self, system: &mut LinearSystem) -> Result<LinearExpression, ErrorBox> {
         let first = {
-            match self.lex()? {
+            match lex(&mut self.stream)? {
                 Some(token) => match token.data {
                     TokenData::EndOfLine => return parse_error!(self, token, "expected an expression after `=`"),
                     _ => token,
@@ -160,7 +160,7 @@ impl<R: Read> Parser<R> {
                 }
 
                 TokenData::Times => {
-                    let next = match self.lex()? {
+                    let next = match lex(&mut self.stream)? {
                         Some(token) => token,
                         None => return parse_error!(self, "expected a number or variable"),
                     };
@@ -193,7 +193,7 @@ impl<R: Read> Parser<R> {
                 }
 
                 TokenData::DividedBy => {
-                    let next = match self.lex()? {
+                    let next = match lex(&mut self.stream)? {
                         Some(token) => token,
                         None => return parse_error!(self, "expected a number"),
                     };
@@ -239,11 +239,9 @@ impl<R: Read> Parser<R> {
                     last = Some(token);
                     break;
                 }
-
-                TokenData::Whitespace | TokenData::Comment => unreachable!(),
             }
 
-            token = match self.lex()? {
+            token = match lex(&mut self.stream)? {
                 Some(token) => token,
                 None => break,
             }
@@ -253,18 +251,6 @@ impl<R: Read> Parser<R> {
             State::Constant(value) => Ok((Term::Constant(value), last)),
             State::Linear(coeff, identifier) => Ok((Term::Linear(coeff, identifier), last)),
             State::Empty | State::Plus | State::Minus => parse_error!(self, "expected a number or variable"),
-        }
-    }
-
-    fn lex(&mut self) -> Result<Option<Token>, ErrorBox> {
-        loop {
-            match lex(&mut self.stream)? {
-                Some(token) => match token.data {
-                    TokenData::Whitespace | TokenData::Comment => continue,
-                    _ => return Ok(Some(token)),
-                },
-                None => return Ok(None),
-            }
         }
     }
 }

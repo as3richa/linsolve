@@ -17,163 +17,98 @@ pub enum TokenData {
     Times,
     DividedBy,
     Equals,
-    Whitespace,
-    Comment,
     EndOfLine,
 }
 
 macro_rules! lex_error {
-    ($stream:ident, $( $format_params:expr ),+) => {
-        {
-            let message = format!($($format_params),*);
-            let error = LexError::new(&$stream.filename, $stream.line, $stream.column, &message);
-            Err(ErrorBox::from_lex_error(error))
-        }
-    };
-}
-
-macro_rules! peek {
-    ($stream:ident) => {{
-        match $stream.peek() {
-            Ok(value) => value,
-            Err(error) => return Err(ErrorBox::from_io_error(error)),
-        }
+    ($stream:ident, $( $format_params:expr ),+) => {{
+        let message = format!($($format_params),*);
+        let error = LexError::new(&$stream.filename, $stream.line, $stream.column, &message);
+        Err(ErrorBox::from_lex_error(error))
     }};
 }
 
-macro_rules! consume {
-    ($stream:ident, $( $patterns:pat )|+, $matched:ident, $unmatched:ident) => {
-        while let Some(byte) = peek!($stream) {
-            match byte {
-                $($patterns)|* => $matched!(byte),
-                _ => $unmatched!(byte)
-            }
-            $stream.forward();
-        }
-    };
-}
-
-macro_rules! munch_while {
-    ($stream:ident, $lexeme:ident, $( $patterns:pat )|+) => {
-        macro_rules! matched {
-            ($byte:ident) => { $lexeme.push($byte as char); }
-        }
-        macro_rules! unmatched {
-            ($byte:ident) => { break; }
-        }
-        consume!($stream, $($patterns)|*, matched, unmatched)
-    };
-
-    ($stream:ident, $lexeme:ident, :alpha) => {
-        munch_while!($stream, $lexeme, b'a'...b'z' | b'A'...b'Z')
-    };
-
-    ($stream:ident, $lexeme:ident, :alphanumeric) => {
-        munch_while!($stream, $lexeme, b'a'...b'z' | b'A'...b'Z' | b'0'...b'9')
-    };
-
-    ($stream:ident, $lexeme:ident, :numeric) => {
-        munch_while!($stream, $lexeme, b'0'...b'9')
-    };
-}
-
-macro_rules! skip_while {
-    ($stream:ident, $( $patterns:pat )|+) => {
-        macro_rules! matched {
-            ($byte:ident) => { (); }
-        }
-        macro_rules! unmatched {
-            ($byte:ident) => { break; }
-        }
-        consume!($stream, $($patterns)|*, matched, unmatched)
-    };
-
-    ($stream:ident, :whitespace) => {
-        skip_while!($stream, b' ' | b'\t')
-    };
-}
-
-macro_rules! skip_until {
-    ($stream:ident, $( $patterns:pat )|+) => {
-        macro_rules! matched {
-            ($byte:ident) => { break; }
-        }
-        macro_rules! unmatched {
-            ($byte:ident) => { (); }
-        }
-        consume!($stream, $($patterns)|*, matched, unmatched)
-    };
-}
-
-macro_rules! assert_byte {
-    ($stream:ident, $( $patterns:pat )|+, $message:expr) => {
-        match peek!($stream) {
-            Some(byte) => {
-                match byte {
-                    $($patterns)|* => (),
-                    _ => return lex_error!($stream, $message)
-                }
-            },
-            None => return lex_error!($stream, $message),
-        }
-    };
-
-    ($stream: ident, :alphanumeric, $message:expr) => {
-        assert_byte!($stream, b'a'...b'z' | b'A'...b'Z' | b'0'...b'9', $message)
-    };
-
-    ($stream: ident, :numeric, $message:expr) => {
-        assert_byte!($stream, b'0'...b'9', $message)
-    };
-}
-
 pub fn lex<R: Read>(stream: &mut Stream<R>) -> Result<Option<Token>, ErrorBox> {
-    match peek!(stream) {
-        Some(byte) => lex_something(stream, byte),
-        None => Ok(None),
-    }
-}
+    while let Some(byte) = stream.peek()? {
+        let line = stream.line;
+        let column = stream.column;
 
-fn lex_something<R: Read>(stream: &mut Stream<R>, byte: u8) -> Result<Option<Token>, ErrorBox> {
-    let line = stream.line;
-    let column = stream.column;
+        let data = match byte {
+            b'a'...b'z' | b'A'...b'Z' => lex_variable(stream)?,
 
-    let result = match byte {
-        b'a'...b'z' | b'A'...b'Z' => lex_variable(stream),
-        b'.' | b'0'...b'9' => lex_decimal(stream),
-        b'#' => lex_comment(stream),
-        b' ' | b'\t' => lex_whitespace(stream),
-        b'\r' | b'\n' => lex_end_of_line(stream),
+            b'0'...b'9' => lex_decimal(stream)?,
 
-        b'+' | b'-' | b'*' | b'/' | b'=' => {
-            stream.forward();
-            match byte {
-                b'+' => Ok(TokenData::Plus),
-                b'-' => Ok(TokenData::Minus),
-                b'*' => Ok(TokenData::Times),
-                b'/' => Ok(TokenData::DividedBy),
-                b'=' => Ok(TokenData::Equals),
-                _ => unreachable!(),
+            b'#' => {
+                loop {
+                    stream.forward();
+                    match stream.peek()? {
+                        Some(b'\r') | Some(b'\n') => break,
+                        _ => continue,
+                    }
+                }
+                continue;
             }
-        }
 
-        /* Printable ASCII that isn't a valid leading character for a token */
-        b'!' | b'"' | b'$'...b')' | b',' | b':'...b'<' | b'>'...b'@' | b'['...b'`' | b'{'...b'~' => {
-            lex_error!(stream, "unexpected character {}", byte as char)
-        }
+            b' ' | b'\t' => {
+                skip_whitespace(stream)?;
+                continue;
+            }
 
-        /* Unprintable ASCII, or a byte that isn't valid ASCII */
-        _ => lex_error!(
-            stream,
-            "unexpected byte {:#x} (Unicode is permitted only in comments)",
-            byte
-        ),
-    };
+            b'\r' | b'\n' => {
+                loop {
+                    stream.forward();
+                    match stream.peek()? {
+                        Some(b'\r') | Some(b'\n') => continue,
+                        _ => break,
+                    }
+                }
+                TokenData::EndOfLine
+            }
 
-    match result {
-        Ok(data) => Ok(Some(Token { data, line, column })),
-        Err(error) => Err(error),
+            b'+' => {
+                stream.forward();
+                TokenData::Plus
+            }
+
+            b'-' => {
+                stream.forward();
+                TokenData::Minus
+            }
+
+            b'*' => {
+                stream.forward();
+                TokenData::Times
+            }
+
+            b'/' => {
+                stream.forward();
+                TokenData::DividedBy
+            }
+
+            b'=' => {
+                stream.forward();
+                TokenData::Equals
+            }
+
+            /* Printable ASCII that isn't a valid leading character for a token */
+            b'!' | b'"' | b'$'...b')' | b',' | b':'...b'<' | b'>'...b'@' | b'['...b'`' | b'{'...b'~' => {
+                return lex_error!(stream, "unexpected character {}", byte as char);
+            }
+
+            /* Unprintable ASCII, or a byte that isn't valid ASCII */
+            _ => {
+                return lex_error!(
+                    stream,
+                    "unexpected byte {:#x} (Unicode is permitted only in comments)",
+                    byte
+                );
+            }
+        };
+
+        return Ok(Some(Token { data, line, column }));
     }
+
+    Ok(None)
 }
 
 fn lex_variable<R: Read>(stream: &mut Stream<R>) -> Result<TokenData, ErrorBox> {
@@ -184,9 +119,9 @@ fn lex_variable<R: Read>(stream: &mut Stream<R>) -> Result<TokenData, ErrorBox> 
      * Gamma_{k1} */
 
     let mut identifier = String::new();
-    munch_while!(stream, identifier, :alpha);
+    munch_alphabetical(&mut identifier, stream)?;
 
-    match peek!(stream) {
+    match stream.peek()? {
         Some(b'_') => {
             identifier.push('_');
             stream.forward();
@@ -194,26 +129,31 @@ fn lex_variable<R: Read>(stream: &mut Stream<R>) -> Result<TokenData, ErrorBox> 
         _ => return Ok(TokenData::Variable(identifier)), /* Case (i) */
     }
 
-    match peek!(stream) {
+    match stream.peek()? {
         Some(byte) => {
             match byte {
                 b'a'...b'z' | b'A'...b'Z' | b'0'...b'9' => {
                     /* Case (ii) */
-                    munch_while!(stream, identifier, :alphanumeric);
+                    munch_alphanumeric(&mut identifier, stream)?;
                 }
+
                 b'{' => {
                     /* Case (iii) */
                     stream.forward();
-                    skip_while!(stream, :whitespace);
+                    skip_whitespace(stream)?;
 
-                    assert_byte!(stream, :alphanumeric, "expected an braced-alphanumeric subscript for variable");
-                    munch_while!(stream, identifier, :alphanumeric);
+                    if !munch_alphanumeric(&mut identifier, stream)? {
+                        return lex_error!(stream, "expected a braced alphanumeric subscript for variable");
+                    }
 
-                    skip_while!(stream, :whitespace);
+                    skip_whitespace(stream)?;
 
-                    assert_byte!(stream, b'}', "expected a closing brace");
-                    stream.forward();
+                    match stream.peek()? {
+                        Some(b'}') => stream.forward(),
+                        _ => return lex_error!(stream, "expected a closing brace"),
+                    }
                 }
+
                 _ => {
                     return lex_error!(
                         stream,
@@ -230,39 +170,40 @@ fn lex_variable<R: Read>(stream: &mut Stream<R>) -> Result<TokenData, ErrorBox> 
 
 fn lex_decimal<R: Read>(stream: &mut Stream<R>) -> Result<TokenData, ErrorBox> {
     let mut value = String::new();
-    munch_while!(stream, value, :numeric);
+    munch_numeric(&mut value, stream)?;
 
-    match peek!(stream) {
+    match stream.peek()? {
         Some(byte) => {
             if byte == b'.' {
                 value.push('.');
                 stream.forward();
-                assert_byte!(stream, :numeric, "expected fractional part of value to be non-empty");
-                munch_while!(stream, value, :numeric);
+                if !munch_numeric(&mut value, stream)? {
+                    return lex_error!(stream, "expected fractional part of value to be non-empty");
+                }
             }
         }
         None => return Ok(TokenData::Decimal(value)),
     }
 
-    match peek!(stream) {
+    match stream.peek()? {
         Some(byte) => {
             if byte == b'e' || byte == b'E' {
                 value.push('e');
                 stream.forward();
-                if let Some(byte) = peek!(stream) {
-                    match byte {
-                        b'-' => {
-                            value.push('-');
-                            stream.forward();
-                        }
-                        b'+' => {
-                            stream.forward();
-                        }
-                        _ => (),
+                match stream.peek()? {
+                    Some(b'-') => {
+                        value.push('-');
+                        stream.forward();
                     }
+                    Some(b'+') => stream.forward(),
+                    _ => (),
                 }
-                assert_byte!(stream, :numeric, "expected an optional sign followed by an integer in exponential part of value");
-                munch_while!(stream, value, :numeric);
+                if !munch_numeric(&mut value, stream)? {
+                    return lex_error!(
+                        stream,
+                        "expected an optional sign followed by an integer in exponential part of value"
+                    );
+                }
             }
             Ok(TokenData::Decimal(value))
         }
@@ -270,17 +211,67 @@ fn lex_decimal<R: Read>(stream: &mut Stream<R>) -> Result<TokenData, ErrorBox> {
     }
 }
 
-fn lex_comment<R: Read>(stream: &mut Stream<R>) -> Result<TokenData, ErrorBox> {
-    skip_until!(stream, b'\r' | b'\n');
-    Ok(TokenData::Comment)
+fn skip_whitespace<R: Read>(stream: &mut Stream<R>) -> Result<(), ErrorBox> {
+    loop {
+        match stream.peek()? {
+            Some(b' ') | Some(b'\t') => {
+                stream.forward();
+                continue;
+            }
+            _ => {
+                return Ok(());
+            }
+        }
+    }
 }
 
-fn lex_whitespace<R: Read>(stream: &mut Stream<R>) -> Result<TokenData, ErrorBox> {
-    skip_while!(stream, :whitespace);
-    Ok(TokenData::Whitespace)
+fn munch_alphabetical<R: Read>(buffer: &mut String, stream: &mut Stream<R>) -> Result<bool, ErrorBox> {
+    let mut munched = false;
+
+    while let Some(byte) = stream.peek()? {
+        match byte {
+            b'a'...b'z' | b'A'...b'Z' => {
+                munched = true;
+                buffer.push(byte as char);
+                stream.forward();
+            }
+            _ => break,
+        }
+    }
+
+    Ok(munched)
 }
 
-fn lex_end_of_line<R: Read>(stream: &mut Stream<R>) -> Result<TokenData, ErrorBox> {
-    skip_while!(stream, b'\r' | b'\n');
-    Ok(TokenData::EndOfLine)
+fn munch_alphanumeric<R: Read>(buffer: &mut String, stream: &mut Stream<R>) -> Result<bool, ErrorBox> {
+    let mut munched = false;
+
+    while let Some(byte) = stream.peek()? {
+        match byte {
+            b'a'...b'z' | b'A'...b'Z' | b'0'...b'9' => {
+                munched = true;
+                buffer.push(byte as char);
+                stream.forward();
+            }
+            _ => break,
+        }
+    }
+
+    Ok(munched)
+}
+
+fn munch_numeric<R: Read>(buffer: &mut String, stream: &mut Stream<R>) -> Result<bool, ErrorBox> {
+    let mut munched = false;
+
+    while let Some(byte) = stream.peek()? {
+        match byte {
+            b'0'...b'9' => {
+                munched = true;
+                buffer.push(byte as char);
+                stream.forward();
+            }
+            _ => break,
+        }
+    }
+
+    Ok(munched)
 }

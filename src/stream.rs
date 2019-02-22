@@ -1,5 +1,6 @@
-use std::io;
 use std::io::{Bytes, Read};
+
+use errors::ErrorBox;
 
 pub struct Stream<R: Read> {
     pub filename: String,
@@ -34,7 +35,7 @@ impl<R: Read> Stream<R> {
         };
     }
 
-    pub fn peek(&mut self) -> Result<Option<u8>, io::Error> {
+    pub fn peek(&mut self) -> Result<Option<u8>, ErrorBox> {
         match self.peeked {
             Some(byte) => Ok(Some(byte)),
             None => match self.iter.next() {
@@ -42,7 +43,7 @@ impl<R: Read> Stream<R> {
                     self.peeked = Some(byte);
                     Ok(Some(byte))
                 }
-                Some(Err(error)) => Err(error),
+                Some(Err(error)) => Err(ErrorBox::from_io_error(error)),
                 None => Ok(None),
             },
         }
