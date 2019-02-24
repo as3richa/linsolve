@@ -24,7 +24,7 @@ macro_rules! lex_error {
     ($stream:ident, $( $format_params:expr ),+) => {{
         let message = format!($($format_params),*);
         let error = LexError::new(&$stream.filename, $stream.line, $stream.column, &message);
-        Err(ErrorBox::from_lex_error(error))
+        Err(ErrorBox::from(error))
     }};
 }
 

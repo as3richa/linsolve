@@ -8,12 +8,12 @@ use crate::stream::Stream;
 macro_rules! parse_error {
     ($stream:ident, $token:ident, $message:expr) => {{
         let error = ParseError::new(&$stream.filename, $token.line, $token.column, &$message);
-        Err(ErrorBox::from_parse_error(error))
+        Err(ErrorBox::from(error))
     }};
 
     ($stream:ident, $message:expr) => {{
         let error = ParseError::new(&$stream.filename, $stream.line, $stream.column, &$message);
-        Err(ErrorBox::from_parse_error(error))
+        Err(ErrorBox::from(error))
     }};
 }
 

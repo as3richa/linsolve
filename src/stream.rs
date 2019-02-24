@@ -43,7 +43,7 @@ impl<R: Read> Stream<R> {
                     self.peeked = Some(byte);
                     Ok(Some(byte))
                 }
-                Some(Err(error)) => Err(ErrorBox::from_io_error(error)),
+                Some(Err(error)) => Err(ErrorBox::from(error)),
                 None => Ok(None),
             },
         }

@@ -5,6 +5,7 @@ mod errors;
 mod lexer;
 mod linear_system;
 mod parser;
+mod renderers;
 mod stream;
 
 use stream::Stream;

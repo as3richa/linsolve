@@ -37,7 +37,7 @@ fn is_zero(value: f64) -> bool {
 }
 
 impl LinearSystem {
-    pub fn new() -> LinearSystem {
+    pub fn new() -> Self {
         Self { system: vec![] }
     }
 

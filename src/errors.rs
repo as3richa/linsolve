@@ -5,21 +5,18 @@ use std::ops::Deref;
 
 #[derive(Debug)]
 pub enum ErrorBox {
-    Lex(LexError),
-    Parse(ParseError),
+    ParseOrLex(ParseOrLexError),
     Io(io::Error),
 }
 
-impl ErrorBox {
-    pub fn from_lex_error(error: LexError) -> ErrorBox {
-        ErrorBox::Lex(error)
+impl From<ParseOrLexError> for ErrorBox {
+    fn from(error: LexError) -> Self {
+        ErrorBox::ParseOrLex(error)
     }
+}
 
-    pub fn from_parse_error(error: ParseError) -> ErrorBox {
-        ErrorBox::Parse(error)
-    }
-
-    pub fn from_io_error(error: io::Error) -> ErrorBox {
+impl From<io::Error> for ErrorBox {
+    fn from(error: io::Error) -> Self {
         ErrorBox::Io(error)
     }
 }
@@ -29,8 +26,7 @@ impl Deref for ErrorBox {
 
     fn deref(&self) -> &Self::Target {
         match self {
-            ErrorBox::Lex(ref error) => error,
-            ErrorBox::Parse(ref error) => error,
+            ErrorBox::ParseOrLex(ref error) => error,
             ErrorBox::Io(ref error) => error,
         }
     }
