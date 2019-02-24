@@ -13,8 +13,9 @@ fn main() {
     let stdin = io::stdin();
     let handle = stdin.lock();
     let mut stream = Stream::new("<standard input>".to_string(), handle.bytes());
-    match parser::parse(&mut stream) {
-        Ok(system) => println!("{:?}", system),
-        Err(err) => println!("{}", err),
-    }
+
+    let mut system = parser::parse(&mut stream).unwrap();
+    println!("{:?}\n\n\n", system);
+    system.solve();
+    println!("{:?}\n\n\n", system);
 }

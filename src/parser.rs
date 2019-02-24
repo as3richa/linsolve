@@ -2,7 +2,7 @@ use std::io::Read;
 
 use crate::errors::{ErrorBox, ParseError};
 use crate::lexer::{lex, Token, TokenData};
-use crate::linear_system::{LinearExpression, LinearSystem};
+use crate::linear_system::{LinearExpression, LinearSystem, Term};
 use crate::stream::Stream;
 
 macro_rules! parse_error {
@@ -15,11 +15,6 @@ macro_rules! parse_error {
         let error = ParseError::new(&$stream.filename, $stream.line, $stream.column, &$message);
         Err(ErrorBox::from_parse_error(error))
     }};
-}
-
-enum Term {
-    Constant(f64),
-    Linear(f64, String),
 }
 
 pub fn parse<R: Read>(stream: &mut Stream<R>) -> Result<LinearSystem, ErrorBox> {
@@ -85,15 +80,11 @@ fn parse_expr<R: Read>(
     first: Token,
 ) -> Result<(LinearExpression, Option<Token>), ErrorBox> {
     let mut token = first;
-    let mut expr = system.new_expr();
+    let mut expr = LinearExpression::new();
 
     loop {
         let (term, next) = parse_term(stream, token)?;
-
-        match term {
-            Term::Constant(value) => system.add_constant_to_expr(&mut expr, value),
-            Term::Linear(coeff, identifier) => system.add_linear_term_to_expr(&mut expr, coeff, identifier),
-        }
+        system.add_term_to_expr(&mut expr, term);
 
         match next {
             Some(next) => match next.data {

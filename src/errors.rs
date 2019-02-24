@@ -3,7 +3,7 @@ use std::fmt;
 use std::io;
 use std::ops::Deref;
 
-// #[derive(Debug)]
+#[derive(Debug)]
 pub enum ErrorBox {
     Lex(LexError),
     Parse(ParseError),
