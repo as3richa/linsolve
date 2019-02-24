@@ -118,15 +118,15 @@ fn lex_variable<R: Read>(stream: &mut Stream<R>) -> Result<TokenData, ErrorBox> 
      * subscript, with leading and trailing spaces permitted, e.g. x_{1}, alpha_{ zero },
      * Gamma_{k1} */
 
-    let mut identifier = String::new();
-    munch_alphabetical(&mut identifier, stream)?;
+    let mut name = String::new();
+    munch_alphabetical(&mut name, stream)?;
 
     match stream.peek()? {
         Some(b'_') => {
-            identifier.push('_');
+            name.push('_');
             stream.forward();
         }
-        _ => return Ok(TokenData::Variable(identifier)), /* Case (i) */
+        _ => return Ok(TokenData::Variable(name)), /* Case (i) */
     }
 
     match stream.peek()? {
@@ -134,7 +134,7 @@ fn lex_variable<R: Read>(stream: &mut Stream<R>) -> Result<TokenData, ErrorBox> 
             match byte {
                 b'a'...b'z' | b'A'...b'Z' | b'0'...b'9' => {
                     /* Case (ii) */
-                    munch_alphanumeric(&mut identifier, stream)?;
+                    munch_alphanumeric(&mut name, stream)?;
                 }
 
                 b'{' => {
@@ -142,7 +142,7 @@ fn lex_variable<R: Read>(stream: &mut Stream<R>) -> Result<TokenData, ErrorBox> 
                     stream.forward();
                     skip_whitespace(stream)?;
 
-                    if !munch_alphanumeric(&mut identifier, stream)? {
+                    if !munch_alphanumeric(&mut name, stream)? {
                         return lex_error!(stream, "expected a braced alphanumeric subscript for variable");
                     }
 
@@ -162,7 +162,7 @@ fn lex_variable<R: Read>(stream: &mut Stream<R>) -> Result<TokenData, ErrorBox> 
                 }
             }
 
-            Ok(TokenData::Variable(identifier))
+            Ok(TokenData::Variable(name))
         }
         None => lex_error!(stream, "expected a subscript for variable"),
     }

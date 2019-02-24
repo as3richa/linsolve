@@ -14,8 +14,6 @@ fn main() {
     let handle = stdin.lock();
     let mut stream = Stream::new("<standard input>".to_string(), handle.bytes());
 
-    let mut system = parser::parse(&mut stream).unwrap();
-    println!("{:?}\n\n\n", system);
+    let system = parser::parse(&mut stream).unwrap();
     system.solve();
-    println!("{:?}\n\n\n", system);
 }
