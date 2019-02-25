@@ -2,17 +2,13 @@ use std::fmt::Write;
 use std::io;
 
 use crate::errors::ErrorBox;
-
-pub enum RendererTerm {
-    Constant(f64),
-    Linear(f64, usize),
-}
+use crate::linear_system::IndexedTerm;
 
 pub trait Renderer {
     fn set_names(&mut self, names: Vec<String>);
     fn write_str(&mut self, string: &str) -> Result<(), ErrorBox>;
     fn write_inline_name(&mut self, id: usize) -> Result<(), ErrorBox>;
-    fn write_system<T: Iterator<Item = RendererTerm>, E: Iterator<Item = T>>(
+    fn write_system<L: Iterator<Item = IndexedTerm>, R: Iterator<Item = IndexedTerm>, E: Iterator<Item = (L, R)>>(
         &mut self,
         equation_iter: E,
     ) -> Result<(), ErrorBox>;
@@ -24,8 +20,33 @@ pub struct LatexRenderer<W: io::Write> {
 }
 
 impl<W: io::Write> LatexRenderer<W> {
-    fn new(stream: W) -> Self {
+    pub fn new(stream: W) -> Self {
         Self { stream, names: vec![] }
+    }
+
+    fn write_expr<T: Iterator<Item = IndexedTerm>>(&mut self, mut expr_iter: T) -> Result<(), ErrorBox> {
+        match expr_iter.next() {
+            Some(term) => match term {
+                IndexedTerm::Linear(coeff, index) => write!(self.stream, "{}{}", coeff, self.names[index])?,
+                IndexedTerm::Constant(value) => write!(self.stream, "{}", value)?,
+            },
+            None => {
+                self.write_str("0")?;
+                return Ok(());
+            }
+        }
+
+        for term in expr_iter {
+            match term {
+                IndexedTerm::Linear(coeff, index) => {
+                    write!(self.stream, " {} {}{}", sign(coeff), coeff.abs(), self.names[index])?;
+                }
+                IndexedTerm::Constant(value) => {
+                    write!(self.stream, " {} {}", sign(value), value.abs())?;
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -47,7 +68,7 @@ impl<W: io::Write> Renderer for LatexRenderer<W> {
                 }
             };
 
-            if subscript.len() > 0 {
+            if !subscript.is_empty() {
                 assert!(subscript.len() >= 2);
 
                 if subscript.len() == 2 {
@@ -76,12 +97,37 @@ impl<W: io::Write> Renderer for LatexRenderer<W> {
         Ok(())
     }
 
-    fn write_system<T: Iterator<Item = RendererTerm>, E: Iterator<Item = T>>(
+    fn write_system<L: Iterator<Item = IndexedTerm>, R: Iterator<Item = IndexedTerm>, E: Iterator<Item = (L, R)>>(
         &mut self,
         equation_iter: E,
     ) -> Result<(), ErrorBox> {
         self.write_str("\\begin{align*}\n")?;
-        self.write_str("\\end{align*}\n")?;
+
+        let mut first = true;
+
+        for (lhs_iter, rhs_iter) in equation_iter {
+            if !first {
+                self.write_str(" \\\\\n")?;
+            } else {
+                first = false;
+            }
+
+            self.write_str("  ")?;
+            self.write_expr(lhs_iter)?;
+            self.write_str(" &= ")?;
+            self.write_expr(rhs_iter)?;
+        }
+
+        self.write_str("\n\\end{align*}\n")?;
+
         Ok(())
+    }
+}
+
+fn sign(value: f64) -> char {
+    if value >= 0.0 {
+        '+'
+    } else {
+        '-'
     }
 }

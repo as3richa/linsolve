@@ -2,7 +2,7 @@ use std::io::Read;
 
 use crate::errors::{ErrorBox, ParseError};
 use crate::lexer::{lex, Token, TokenData};
-use crate::linear_system::{LinearExpression, LinearSystem, Term};
+use crate::linear_system::{InputTerm, LinearExpression, LinearSystem};
 use crate::stream::Stream;
 
 macro_rules! parse_error {
@@ -95,7 +95,7 @@ fn parse_expr<R: Read>(stream: &mut Stream<R>, first: Token) -> Result<(LinearEx
     }
 }
 
-fn parse_term<R: Read>(stream: &mut Stream<R>, mut token: Token) -> Result<(Term, Option<Token>), ErrorBox> {
+fn parse_term<R: Read>(stream: &mut Stream<R>, mut token: Token) -> Result<(InputTerm, Option<Token>), ErrorBox> {
     enum State {
         Empty,
         Plus,
@@ -220,8 +220,8 @@ fn parse_term<R: Read>(stream: &mut Stream<R>, mut token: Token) -> Result<(Term
     }
 
     match state {
-        State::Constant(value) => Ok((Term::Constant(value), last)),
-        State::Linear(coeff, name) => Ok((Term::Linear(coeff, name), last)),
+        State::Constant(value) => Ok((InputTerm::Constant(value), last)),
+        State::Linear(coeff, name) => Ok((InputTerm::Linear(coeff, name), last)),
         State::Empty | State::Plus | State::Minus => parse_error!(stream, "expected a number or variable"),
     }
 }

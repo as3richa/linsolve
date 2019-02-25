@@ -1,65 +1,171 @@
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::iter;
 use std::mem;
 use std::ops::AddAssign;
 
+use crate::renderers::Renderer;
+
 const EPSILON: f64 = 1.0e-9;
 
-#[derive(Debug)]
-pub struct LinearSystem {
-    system: Vec<(LinearExpression, LinearExpression)>,
-}
+/* ================================================================================ */
 
-#[derive(Debug)]
-pub struct LinearExpression {
-    terms: Vec<Term>,
-}
-
-#[derive(Debug)]
-pub enum Term {
+pub enum InputTerm {
     Constant(f64),
     Linear(f64, String),
 }
 
-#[derive(Debug)]
-pub enum SolutionSet {
-    Empty,
+pub struct LinearExpression {
+    terms: Vec<InputTerm>,
 }
 
-#[derive(Debug)]
-struct CollectedExpression {
-    coeffs: Vec<f64>,
-    constant: f64,
+pub struct LinearSystem {
+    equations: Vec<(LinearExpression, LinearExpression)>,
 }
+
+#[derive(Clone)]
+pub enum IndexedTerm {
+    Constant(f64),
+    Linear(f64, usize),
+}
+
+type ExtractedExpression = Vec<IndexedTerm>;
+type ExtractedSystem = Vec<(ExtractedExpression, ExtractedExpression)>;
+
+type CollectedExpression = (Vec<f64>, f64);
+type CollectedSystem = Vec<(CollectedExpression, CollectedExpression)>;
+
+type NormalizedSystem = Vec<(Vec<f64>, f64)>;
 
 fn is_zero(value: f64) -> bool {
     value.abs() < EPSILON
 }
 
+impl LinearExpression {
+    pub fn new() -> LinearExpression {
+        Self { terms: vec![] }
+    }
+}
+
+impl AddAssign<InputTerm> for LinearExpression {
+    fn add_assign(&mut self, term: InputTerm) {
+        self.terms.push(term);
+    }
+}
+
+fn extract(system: LinearSystem) -> (ExtractedSystem, Vec<String>) {
+    let mut names: Vec<String> = vec![];
+    let mut ids_by_name: HashMap<String, usize> = HashMap::new();
+
+    let extracted = {
+        let mut find_id = |name: String| match ids_by_name.entry(name) {
+            Entry::Occupied(entry) => *entry.get(),
+            Entry::Vacant(entry) => {
+                let id = names.len();
+                names.push(entry.key().clone());
+                entry.insert(id);
+                id
+            }
+        };
+
+        let mut extract_expr = |expr: LinearExpression| {
+            expr.terms
+                .into_iter()
+                .map(|term| match term {
+                    InputTerm::Linear(coeff, name) => IndexedTerm::Linear(coeff, find_id(name)),
+                    InputTerm::Constant(value) => IndexedTerm::Constant(value),
+                })
+                .collect()
+        };
+
+        let iter = system.equations.into_iter();
+        iter.map(|(lhs, rhs)| (extract_expr(lhs), extract_expr(rhs))).collect()
+    };
+
+    (extracted, names)
+}
+
+fn collect(system: ExtractedSystem, variables: usize) -> CollectedSystem {
+    let collect_expr = |expr: ExtractedExpression| {
+        let mut coeffs = vec![0.0; variables];
+        let mut constant = 0.0;
+
+        for term in expr.into_iter() {
+            match term {
+                IndexedTerm::Linear(coeff, id) => coeffs[id] += coeff,
+                IndexedTerm::Constant(value) => constant += value,
+            }
+        }
+
+        (coeffs, constant)
+    };
+
+    let iter = system.into_iter();
+    iter.map(|(lhs, rhs)| (collect_expr(lhs), collect_expr(rhs))).collect()
+}
+
+fn normalize(system: CollectedSystem) -> NormalizedSystem {
+    let normalize_equation = |(lhs, rhs): (CollectedExpression, CollectedExpression)| {
+        let (left_coeffs, left_constant) = lhs;
+        let (right_coeffs, right_constant) = rhs;
+
+        let mut coeffs = left_coeffs;
+
+        for (left, right) in coeffs.iter_mut().zip(right_coeffs.into_iter()) {
+            *left -= right;
+        }
+
+        let constant = right_constant - left_constant;
+
+        (coeffs, constant)
+    };
+
+    system.into_iter().map(normalize_equation).collect()
+}
+
+fn remove_tautologies(system: NormalizedSystem) -> NormalizedSystem {
+    let result: NormalizedSystem = system
+        .into_iter()
+        .filter(|(coeffs, constant)| !(is_zero(*constant) && coeffs.iter().all(|&coeff| is_zero(coeff))))
+        .collect();
+
+    if result.is_empty() {
+        return vec![(vec![], 0.0)];
+    }
+
+    result
+}
+
 impl LinearSystem {
     pub fn new() -> Self {
-        Self { system: vec![] }
+        Self { equations: vec![] }
     }
 
     pub fn push_equation(&mut self, lhs: LinearExpression, rhs: LinearExpression) {
-        self.system.push((lhs, rhs))
+        self.equations.push((lhs, rhs))
     }
 
-    pub fn solve(self) -> SolutionSet {
-        println!("{:?}", self.system);
+    pub fn solve<R: Renderer>(self, mut renderer: R) {
+        let (system, names) = extract(self);
+        let variables = names.len();
+        renderer.set_names(names);
+        renderer.write_str("Consider the system of linear equations:\n");
+        render_extracted(&mut renderer, &system);
 
-        let (system, names) = collect(self.system);
-        println!("{:?}\n---", system);
+        let system = collect(system, variables);
+        renderer.write_str("Collecting like terms:\n");
+        // render_collected(&mut renderer, &system);
 
         let mut system = normalize(system);
-        println!("{:?}\n---", system);
+        renderer.write_str("Gathering linear terms on the left and constant terms on the right:\n");
+        render_normalized(&mut renderer, &system);
 
         let mut eqn_index = 0;
 
         while eqn_index < system.len() {
             system = remove_tautologies(system);
-
-            println!("{:?}\n---", system);
+            renderer.write_str("Yada yada yada:\n");
+            render_normalized(&mut renderer, &system);
 
             if system.len() <= 1 {
                 break;
@@ -104,104 +210,52 @@ impl LinearSystem {
                 }
             }
 
-            println!("{:?}\n---", system);
             eqn_index += 1;
         }
-
-        SolutionSet::Empty
     }
 }
 
-impl LinearExpression {
-    pub fn new() -> LinearExpression {
-        Self { terms: vec![] }
-    }
+fn render_extracted<R: Renderer>(renderer: &mut R, system: &ExtractedSystem) {
+    let iter = system
+        .iter()
+        .map(|(lhs, rhs)| (lhs.iter().cloned(), rhs.iter().cloned()));
+    renderer.write_system(iter);
 }
 
-impl AddAssign<Term> for LinearExpression {
-    fn add_assign(&mut self, term: Term) {
-        self.terms.push(term);
-    }
-}
+/*fn render_collected<R: Renderer>(renderer: &mut R, system: &CollectedSystem) {
+    let iter = system.iter().map(|(lhs, rhs)| {
+        let expr_iterator = |expression: &CollectedExpression| {
+            let (coeffs, constant) = expression;
 
-fn collect(
-    system: Vec<(LinearExpression, LinearExpression)>,
-) -> (Vec<(CollectedExpression, CollectedExpression)>, Vec<String>) {
-    let mut names: Vec<String> = vec![];
-    let mut ids_by_name: HashMap<String, usize> = HashMap::new();
-
-    let mut collected_system: Vec<(CollectedExpression, CollectedExpression)> = Vec::with_capacity(system.len());
-
-    {
-        let mut find_id = |name: String| match ids_by_name.entry(name) {
-            Entry::Occupied(entry) => *entry.get(),
-            Entry::Vacant(entry) => {
-                let id = names.len();
-                names.push(entry.key().clone());
-                entry.insert(id);
-                id
-            }
+            let coeffs_iter = coeffs
+                .iter()
+                .cloned()
+                .enumerate()
+                .map(|(index, coeff)| IndexedTerm::Linear(coeff, index));
+            let constant_iter = iter::once(IndexedTerm::Constant(*constant));
+            coeffs_iter.chain(constant_iter)
         };
 
-        let mut collect_expr = |expr: LinearExpression| {
-            let mut collected_expr = CollectedExpression {
-                coeffs: vec![],
-                constant: 0.0,
-            };
+        let lhs_iter = expr_iterator(lhs);
+        let rhs_iter = expr_iterator(rhs);
 
-            for term in expr.terms.into_iter() {
-                match term {
-                    Term::Linear(coeff, name) => {
-                        let id = find_id(name);
-                        if collected_expr.coeffs.len() <= id {
-                            collected_expr.coeffs.resize(id + 1, 0.0);
-                        }
-                        collected_expr.coeffs[id] += coeff;
-                    }
-                    Term::Constant(value) => collected_expr.constant += value,
-                }
-            }
+        (lhs_iter, rhs_iter)
+    });
 
-            collected_expr
-        };
+    renderer.write_system(iter);
+}*/
 
-        for (lhs, rhs) in system.into_iter() {
-            collected_system.push((collect_expr(lhs), collect_expr(rhs)));
-        }
-    }
+fn render_normalized<R: Renderer>(renderer: &mut R, system: &NormalizedSystem) {
+    let iter = system.iter().map(|(coeffs, constant)| {
+        (
+            coeffs
+                .iter()
+                .cloned()
+                .enumerate()
+                .map(|(index, coeff)| IndexedTerm::Linear(coeff, index)),
+            iter::once(IndexedTerm::Constant(*constant)),
+        )
+    });
 
-    (collected_system, names)
-}
-
-fn normalize(system: Vec<(CollectedExpression, CollectedExpression)>) -> Vec<(Vec<f64>, f64)> {
-    let normalize_equation = |(lhs, rhs): (CollectedExpression, CollectedExpression)| {
-        let mut coeffs = lhs.coeffs;
-
-        if coeffs.len() < rhs.coeffs.len() {
-            coeffs.resize(rhs.coeffs.len(), 0.0);
-        }
-
-        for (left, right) in coeffs.iter_mut().zip(rhs.coeffs.into_iter()) {
-            *left -= right;
-        }
-
-        let constant = rhs.constant - lhs.constant;
-
-        (coeffs, constant)
-    };
-
-    system.into_iter().map(normalize_equation).collect()
-}
-
-fn remove_tautologies(system: Vec<(Vec<f64>, f64)>) -> Vec<(Vec<f64>, f64)> {
-    let result: Vec<(Vec<f64>, f64)> = system
-        .into_iter()
-        .filter(|(coeffs, constant)| !(is_zero(*constant) && coeffs.iter().all(|&coeff| is_zero(coeff))))
-        .collect();
-
-    if result.is_empty() {
-        return vec![(vec![], 0.0)];
-    }
-
-    result
+    renderer.write_system(iter);
 }

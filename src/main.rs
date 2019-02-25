@@ -8,13 +8,15 @@ mod parser;
 mod renderers;
 mod stream;
 
-use stream::Stream;
-
 fn main() {
     let stdin = io::stdin();
-    let handle = stdin.lock();
-    let mut stream = Stream::new("<standard input>".to_string(), handle.bytes());
+    let in_handle = stdin.lock();
+    let mut stream = stream::Stream::new("<standard input>".to_string(), in_handle.bytes());
+
+    let stdout = io::stdout();
+    let out_handle = stdout.lock();
+    let renderer = renderers::LatexRenderer::new(out_handle);
 
     let system = parser::parse(&mut stream).unwrap();
-    system.solve();
+    system.solve(renderer);
 }
