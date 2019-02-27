@@ -2,7 +2,7 @@ use std::fmt::Write;
 use std::io;
 
 use crate::errors::ErrorBox;
-use crate::linear_system::IndexedTerm;
+use crate::solver::IndexedTerm;
 
 pub trait Renderer {
     fn set_names(&mut self, names: Vec<String>);

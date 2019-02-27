@@ -2,7 +2,7 @@ use std::io::Read;
 
 use crate::errors::{ErrorBox, ParseError};
 use crate::lexer::{lex, Token, TokenData};
-use crate::linear_system::{InputTerm, LinearExpression, LinearSystem};
+use crate::solver::{InputExpression, InputSystem, InputTerm};
 use crate::stream::Stream;
 
 macro_rules! parse_error {
@@ -17,8 +17,8 @@ macro_rules! parse_error {
     }};
 }
 
-pub fn parse<R: Read>(stream: &mut Stream<R>) -> Result<LinearSystem, ErrorBox> {
-    let mut system = LinearSystem::new();
+pub fn parse<R: Read>(stream: &mut Stream<R>) -> Result<InputSystem, ErrorBox> {
+    let mut system = InputSystem::new();
 
     while let Some(lhs) = parse_lhs(stream)? {
         let rhs = parse_rhs(stream)?;
@@ -28,7 +28,7 @@ pub fn parse<R: Read>(stream: &mut Stream<R>) -> Result<LinearSystem, ErrorBox> 
     Ok(system)
 }
 
-fn parse_lhs<R: Read>(stream: &mut Stream<R>) -> Result<Option<LinearExpression>, ErrorBox> {
+fn parse_lhs<R: Read>(stream: &mut Stream<R>) -> Result<Option<InputExpression>, ErrorBox> {
     let first = {
         loop {
             match lex(stream)? {
@@ -52,7 +52,7 @@ fn parse_lhs<R: Read>(stream: &mut Stream<R>) -> Result<Option<LinearExpression>
     }
 }
 
-fn parse_rhs<R: Read>(stream: &mut Stream<R>) -> Result<LinearExpression, ErrorBox> {
+fn parse_rhs<R: Read>(stream: &mut Stream<R>) -> Result<InputExpression, ErrorBox> {
     let first = {
         match lex(stream)? {
             Some(token) => match token.data {
@@ -74,9 +74,9 @@ fn parse_rhs<R: Read>(stream: &mut Stream<R>) -> Result<LinearExpression, ErrorB
     }
 }
 
-fn parse_expr<R: Read>(stream: &mut Stream<R>, first: Token) -> Result<(LinearExpression, Option<Token>), ErrorBox> {
+fn parse_expr<R: Read>(stream: &mut Stream<R>, first: Token) -> Result<(InputExpression, Option<Token>), ErrorBox> {
     let mut token = first;
-    let mut expr = LinearExpression::new();
+    let mut expr = InputExpression::new();
 
     loop {
         let (term, next) = parse_term(stream, token)?;
