@@ -1,7 +1,10 @@
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::iter;
 use std::mem;
 use std::ops::AddAssign;
+
+use crate::renderers::Renderer;
 
 const EPSILON: f64 = 1.0e-9;
 
@@ -46,6 +49,11 @@ struct CollectedSystem {
     equations: Vec<(CollectedExpression, CollectedExpression)>,
 }
 
+struct CollectedExpressionIterator<'a> {
+    expression: &'a CollectedExpression,
+    index: usize,
+}
+
 struct NormalizedSystem {
     equations: Vec<(Vec<f64>, f64)>,
 }
@@ -71,11 +79,22 @@ impl InputSystem {
         self.equations.push((lhs, rhs))
     }
 
-    pub fn solve(self) {
+    pub fn solve<R: Renderer>(self, renderer: &mut R) {
         let (extracted_system, names) = self.extract();
-        let collected_system = extracted_system.collect(names.len());
+        let variables = names.len();
+        renderer.set_names(names);
+        renderer.write_str("Consider the system of linear equations:\n");
+        extracted_system.render(renderer);
+
+        let collected_system = extracted_system.collect(variables);
+        renderer.write_str("Collecting like terms:\n");
+        collected_system.render(renderer);
+
         let mut normalized_system = collected_system.normalize();
-        normalized_system.solve();
+        renderer.write_str("Gathering linear terms on the left and constant terms on the right:\n");
+        normalized_system.render(renderer);
+
+        normalized_system.solve(renderer);
     }
 
     fn extract(self) -> (ExtractedSystem, Vec<String>) {
@@ -134,6 +153,15 @@ impl ExtractedSystem {
         let equations = self.equations.into_iter();
         CollectedSystem::new(equations.map(pairify!(collect_expr)).collect())
     }
+
+    fn render<R: Renderer>(&self, renderer: &mut R) {
+        let iterator = self
+            .equations
+            .iter()
+            .map(|(lhs, rhs)| (lhs.iter().cloned(), rhs.iter().cloned()));
+
+        renderer.write_system(iterator);
+    }
 }
 
 impl CollectedSystem {
@@ -160,6 +188,49 @@ impl CollectedSystem {
         let equations = self.equations.into_iter();
         NormalizedSystem::new(equations.map(normalize_equation).collect())
     }
+
+    fn render<R: Renderer>(&self, renderer: &mut R) {
+        let iter = self.equations.iter().map(|(lhs, rhs)| {
+            (
+                CollectedExpressionIterator::new(lhs),
+                CollectedExpressionIterator::new(rhs),
+            )
+        });
+
+        renderer.write_system(iter);
+    }
+}
+
+impl<'a> CollectedExpressionIterator<'a> {
+    fn new(expression: &'a CollectedExpression) -> Self {
+        Self { expression, index: 0 }
+    }
+}
+
+impl<'a> Iterator for CollectedExpressionIterator<'a> {
+    type Item = IndexedTerm;
+
+    fn next(&mut self) -> Option<IndexedTerm> {
+        let (coeffs, constant) = self.expression;
+
+        while self.index < coeffs.len() {
+            let coeff = coeffs[self.index];
+            self.index += 1;
+
+            if !is_zero(coeff) {
+                return Some(IndexedTerm::Linear(coeff, self.index - 1));
+            }
+        }
+
+        if self.index == coeffs.len() {
+            self.index = coeffs.len() + 1;
+            if !is_zero(*constant) {
+                return Some(IndexedTerm::Constant(*constant));
+            }
+        }
+
+        None
+    }
 }
 
 impl NormalizedSystem {
@@ -167,17 +238,22 @@ impl NormalizedSystem {
         Self { equations }
     }
 
-    fn solve(&mut self) {
+    fn solve<R: Renderer>(&mut self, renderer: &mut R) {
         let mut equation_index = 0;
 
         while equation_index < self.equations.len() {
             self.remove_tautologies();
+            renderer.write_str("Removing trivial equations:\n");
+            self.render(renderer);
 
             if self.equations.len() <= 1 {
                 break;
             }
 
-            self.step(equation_index);
+            self.step(equation_index, renderer);
+            renderer.write_str("Meep meep FIXME:\n");
+            self.render(renderer);
+
             equation_index += 1;
         }
     }
@@ -189,11 +265,9 @@ impl NormalizedSystem {
         self.equations.retain(is_not_tautological);
     }
 
-    fn step(&mut self, equation_index: usize) {
-        let equations = &mut self.equations;
-
-        let (mut coeffs, mut constant) = mem::replace(&mut equations[equation_index], (vec![], 0.0));
-        assert!(!is_zero(constant));
+    fn step<R: Renderer>(&mut self, equation_index: usize, renderer: &mut R) {
+        let (mut coeffs, mut constant) = mem::replace(&mut self.equations[equation_index], (vec![], 0.0));
+        //        assert!(!is_zero(constant));
 
         let nonzero_coeff = coeffs.iter().cloned().enumerate().find(|(_, coeff)| !is_zero(*coeff));
 
@@ -204,7 +278,7 @@ impl NormalizedSystem {
                 }
                 constant /= value;
 
-                for (other_coeffs, other_constant) in equations.iter_mut() {
+                for (other_coeffs, other_constant) in self.equations.iter_mut() {
                     if other_coeffs.len() <= index || is_zero(other_coeffs[index]) {
                         continue;
                     }
@@ -220,12 +294,27 @@ impl NormalizedSystem {
                     }
                     *other_constant -= factor * constant;
 
-                    other_coeffs[index] = 0.0;
+                    assert!(is_zero(other_coeffs[index]));
                 }
             }
             None => (),
         }
 
-        equations[equation_index] = (coeffs, constant);
+        self.equations[equation_index] = (coeffs, constant);
+    }
+
+    fn render<R: Renderer>(&mut self, renderer: &mut R) {
+        let iter = self.equations.iter().map(|(coeffs, constant)| {
+            let coeffs_iterator = coeffs
+                .iter()
+                .cloned()
+                .enumerate()
+                .filter(|(_, coeff)| !is_zero(*coeff))
+                .map(|(index, coeff)| IndexedTerm::Linear(coeff, index));
+
+            (coeffs_iterator, iter::once(IndexedTerm::Constant(*constant)))
+        });
+
+        renderer.write_system(iter);
     }
 }
