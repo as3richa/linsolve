@@ -83,15 +83,18 @@ impl InputSystem {
         let (extracted_system, names) = self.extract();
         let variables = names.len();
         renderer.set_names(names);
-        renderer.write_str("Consider the system of linear equations:\n");
+        write!(renderer, "Consider the system of linear equations:\n");
         extracted_system.render(renderer);
 
         let collected_system = extracted_system.collect(variables);
-        renderer.write_str("Collecting like terms:\n");
+        write!(renderer, "Collecting like terms:\n");
         collected_system.render(renderer);
 
         let mut normalized_system = collected_system.normalize();
-        renderer.write_str("Gathering linear terms on the left and constant terms on the right:\n");
+        write!(
+            renderer,
+            "Gathering linear terms on the left and constant terms on the right:\n"
+        );
         normalized_system.render(renderer);
 
         normalized_system.solve(renderer);
@@ -242,68 +245,114 @@ impl NormalizedSystem {
         let mut equation_index = 0;
 
         while equation_index < self.equations.len() {
-            self.remove_tautologies();
-            renderer.write_str("Removing trivial equations:\n");
-            self.render(renderer);
+            if self.remove_tautologies() {
+                write!(renderer, "Removing trivial equations:\n");
+                self.render(renderer);
+            }
 
             if self.equations.len() <= 1 {
                 break;
             }
 
             self.step(equation_index, renderer);
-            renderer.write_str("Meep meep FIXME:\n");
-            self.render(renderer);
 
             equation_index += 1;
         }
     }
 
-    fn remove_tautologies(&mut self) {
+    fn remove_tautologies(&mut self) -> bool {
+        let len = self.equations.len();
+
         let is_not_tautological =
             |(coeffs, constant): &(Vec<f64>, f64)| !is_zero(*constant) || coeffs.iter().any(|&coeff| !is_zero(coeff));
 
         self.equations.retain(is_not_tautological);
+
+        self.equations.len() != len
     }
 
     fn step<R: Renderer>(&mut self, equation_index: usize, renderer: &mut R) {
-        let (mut coeffs, mut constant) = mem::replace(&mut self.equations[equation_index], (vec![], 0.0));
-        //        assert!(!is_zero(constant));
+        let nonzero_coeff = {
+            let coeffs = &self.equations[equation_index].0;
+            coeffs.iter().cloned().enumerate().find(|(_, coeff)| !is_zero(*coeff))
+        };
 
-        let nonzero_coeff = coeffs.iter().cloned().enumerate().find(|(_, coeff)| !is_zero(*coeff));
+        let equation_index_suffix = match ((equation_index + 1) % 10) {
+            1 => "st",
+            2 => "nd",
+            3 => "rd",
+            _ => "th",
+        };
 
         match nonzero_coeff {
             Some((index, value)) => {
-                for coeff in coeffs.iter_mut() {
-                    *coeff /= value;
+                let name = renderer.name(index);
+
+                if !is_zero(value - 1.0) {
+                    {
+                        let (ref mut coeffs, ref mut constant) = &mut self.equations[equation_index];
+
+                        for coeff in coeffs.iter_mut() {
+                            *coeff /= value;
+                        }
+                        *constant /= value;
+                    }
+
+                    write!(
+                        renderer,
+                        "Normalizing the {}{} equation with respect to {}:\n",
+                        equation_index + 1,
+                        equation_index_suffix,
+                        name,
+                    );
+                    self.render(renderer);
                 }
-                constant /= value;
 
-                for (other_coeffs, other_constant) in self.equations.iter_mut() {
-                    if other_coeffs.len() <= index || is_zero(other_coeffs[index]) {
-                        continue;
+                let mut changed = false;
+
+                {
+                    let (coeffs, constant) = mem::replace(&mut self.equations[equation_index], (vec![], 0.0));
+
+                    for (other_coeffs, other_constant) in self.equations.iter_mut() {
+                        if other_coeffs.len() <= index || is_zero(other_coeffs[index]) {
+                            continue;
+                        }
+
+                        changed = true;
+
+                        if other_coeffs.len() < coeffs.len() {
+                            other_coeffs.resize(coeffs.len(), 0.0);
+                        }
+
+                        let factor = other_coeffs[index];
+
+                        for (other_coeff, coeff) in other_coeffs.iter_mut().zip(coeffs.iter()) {
+                            *other_coeff -= coeff * factor;
+                        }
+                        *other_constant -= factor * constant;
+
+                        assert!(is_zero(other_coeffs[index]));
                     }
 
-                    if other_coeffs.len() < coeffs.len() {
-                        other_coeffs.resize(coeffs.len(), 0.0);
-                    }
+                    self.equations[equation_index] = (coeffs, constant);
+                }
 
-                    let factor = other_coeffs[index];
-
-                    for (other_coeff, coeff) in other_coeffs.iter_mut().zip(coeffs.iter()) {
-                        *other_coeff -= coeff * factor;
-                    }
-                    *other_constant -= factor * constant;
-
-                    assert!(is_zero(other_coeffs[index]));
+                if changed {
+                    write!(
+                        renderer,
+                        "Eliminating {} with respect to the {}{} equation:\n",
+                        name,
+                        equation_index + 1,
+                        equation_index_suffix,
+                    );
+                    self.render(renderer);
                 }
             }
             None => (),
         }
-
-        self.equations[equation_index] = (coeffs, constant);
     }
 
-    fn render<R: Renderer>(&mut self, renderer: &mut R) {
+    fn render<R: Renderer>(&self, renderer: &mut R) {
         let iter = self.equations.iter().map(|(coeffs, constant)| {
             let coeffs_iterator = coeffs
                 .iter()

@@ -1,13 +1,13 @@
-use std::fmt::Write;
+// use std::fmt::Write;
 use std::io;
+use std::io::Write;
 
 use crate::errors::ErrorBox;
 use crate::solver::IndexedTerm;
 
-pub trait Renderer {
+pub trait Renderer: io::Write {
     fn set_names(&mut self, names: Vec<String>);
-    fn write_str(&mut self, string: &str) -> Result<(), ErrorBox>;
-    fn write_inline_name(&mut self, id: usize) -> Result<(), ErrorBox>;
+    fn name(&self, index: usize) -> String;
     fn write_system<L: Iterator<Item = IndexedTerm>, R: Iterator<Item = IndexedTerm>, E: Iterator<Item = (L, R)>>(
         &mut self,
         equation_iter: E,
@@ -27,11 +27,17 @@ impl<W: io::Write> LatexRenderer<W> {
     fn write_expr<T: Iterator<Item = IndexedTerm>>(&mut self, mut expr_iter: T) -> Result<(), ErrorBox> {
         match expr_iter.next() {
             Some(term) => match term {
-                IndexedTerm::Linear(coeff, index) => write!(self.stream, "{}{}", coeff, self.names[index])?,
+                IndexedTerm::Linear(coeff, index) => {
+                    if is_zero(coeff - 1.0) {
+                        write!(self.stream, "{}", self.names[index])?;
+                    } else {
+                        write!(self.stream, "{}{}", coeff, self.names[index])?;
+                    }
+                }
                 IndexedTerm::Constant(value) => write!(self.stream, "{}", value)?,
             },
             None => {
-                self.write_str("0")?;
+                write!(self.stream, "0")?;
                 return Ok(());
             }
         }
@@ -39,14 +45,28 @@ impl<W: io::Write> LatexRenderer<W> {
         for term in expr_iter {
             match term {
                 IndexedTerm::Linear(coeff, index) => {
-                    write!(self.stream, " {} {}{}", sign(coeff), coeff.abs(), self.names[index])?;
+                    write!(self.stream, " {} ", sign(coeff));
+                    if is_zero(coeff.abs() - 1.0) {
+                        write!(self.stream, "{}", self.names[index])?;
+                    } else {
+                        write!(self.stream, "{}{}", coeff.abs(), self.names[index])?;
+                    }
                 }
-                IndexedTerm::Constant(value) => {
-                    write!(self.stream, " {} {}", sign(value), value.abs())?;
-                }
+                IndexedTerm::Constant(value) => write!(self.stream, " {} {}", sign(value), value.abs())?,
             }
         }
+
         Ok(())
+    }
+}
+
+impl<W: io::Write> io::Write for LatexRenderer<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.stream.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.stream.flush()
     }
 }
 
@@ -74,9 +94,9 @@ impl<W: io::Write> Renderer for LatexRenderer<W> {
                 if subscript.len() == 2 {
                     result += subscript;
                 } else if subscript[1..].chars().all(|c| c.is_digit(10)) {
-                    write!(result, "_{{{}}}", subscript).unwrap();
+                    result = format!("{}_{{{}}}", result, subscript);
                 } else {
-                    write!(result, "_{{\\text{{{}}}}}", subscript).unwrap();
+                    result = format!("{}_{{\\text{{{}}}}}", result, subscript);
                 }
             }
 
@@ -86,39 +106,33 @@ impl<W: io::Write> Renderer for LatexRenderer<W> {
         self.names = names.into_iter().map(texify_name).collect()
     }
 
-    fn write_str(&mut self, string: &str) -> Result<(), ErrorBox> {
-        self.stream.write_all(string.as_bytes())?;
-        Ok(())
-    }
-
-    fn write_inline_name(&mut self, id: usize) -> Result<(), ErrorBox> {
-        assert!(id < self.names.len());
-        write!(self.stream, "${}$", self.names[id])?;
-        Ok(())
+    fn name(&self, index: usize) -> String {
+        assert!(index < self.names.len());
+        format!("${}$", self.names[index])
     }
 
     fn write_system<L: Iterator<Item = IndexedTerm>, R: Iterator<Item = IndexedTerm>, E: Iterator<Item = (L, R)>>(
         &mut self,
         equation_iter: E,
     ) -> Result<(), ErrorBox> {
-        self.write_str("\\begin{align*}\n")?;
+        write!(self.stream, "\\begin{{align*}}\n")?;
 
         let mut first = true;
 
         for (lhs_iter, rhs_iter) in equation_iter {
             if !first {
-                self.write_str(" \\\\\n")?;
+                write!(self.stream, " \\\\\n")?;
             } else {
                 first = false;
             }
 
-            self.write_str("  ")?;
+            write!(self.stream, "  ")?;
             self.write_expr(lhs_iter)?;
-            self.write_str(" &= ")?;
+            write!(self.stream, " &= ")?;
             self.write_expr(rhs_iter)?;
         }
 
-        self.write_str("\n\\end{align*}\n")?;
+        write!(self.stream, "\n\\end{{align*}}\n")?;
 
         Ok(())
     }
@@ -130,4 +144,10 @@ fn sign(value: f64) -> char {
     } else {
         '-'
     }
+}
+
+const EPSILON: f64 = 1.0e-9;
+
+fn is_zero(value: f64) -> bool {
+    value.abs() < EPSILON
 }
